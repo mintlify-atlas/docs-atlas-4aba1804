@@ -1,0 +1,338 @@
+---
+title: AWS S3 Setup
+description: Configure AWS S3 bucket and IAM credentials for file storage
+---
+
+Vercel For Frontend uses AWS S3 to store uploaded project files and built artifacts. This guide walks you through setting up an S3 bucket and creating IAM credentials.
+
+## Prerequisites
+
+- An AWS account ([create one here](https://aws.amazon.com/free/))
+- AWS CLI installed (optional, but recommended)
+
+## Step 1: Create an S3 Bucket
+
+<Steps>
+  <Step title="Navigate to S3 Console">
+    Go to the [AWS S3 Console](https://console.aws.amazon.com/s3/) and click **Create bucket**.
+  </Step>
+
+  <Step title="Configure Bucket Settings">
+    Enter the following settings:
+
+    <ParamField path="Bucket name" required>
+      `vercel-frontend` (or your custom name)
+      
+      <Warning>
+        The source code currently hardcodes `vercel-frontend` as the bucket name. Either use this exact name or update the bucket name in:
+        - `upload-service/src/utils/uploadFiles.ts:20`
+        - `deploy-service/src/utils/donwloadS3Folde.ts:16,44,76`
+      </Warning>
+    </ParamField>
+
+    <ParamField path="AWS Region" required>
+      Choose a region close to your users (e.g., `us-east-1`, `us-west-2`)
+      
+      <Note>
+        Remember this region - you'll need it for the `AWS_REGION` environment variable.
+      </Note>
+    </ParamField>
+
+    <ParamField path="Object Ownership">
+      Select **ACLs disabled (recommended)**
+    </ParamField>
+
+    <ParamField path="Block Public Access">
+      Keep **Block all public access** enabled for security
+      
+      The application uses IAM credentials, not public access.
+    </ParamField>
+
+    <ParamField path="Bucket Versioning">
+      Optional - Enable if you want to keep file history
+    </ParamField>
+
+    <ParamField path="Encryption">
+      Enable **Server-side encryption with Amazon S3 managed keys (SSE-S3)**
+    </ParamField>
+  </Step>
+
+  <Step title="Create the Bucket">
+    Click **Create bucket** to finalize the setup.
+  </Step>
+</Steps>
+
+## Step 2: Create IAM User and Credentials
+
+<Steps>
+  <Step title="Navigate to IAM Console">
+    Go to [IAM Console](https://console.aws.amazon.com/iam/) and select **Users** from the left sidebar, then click **Create user**.
+  </Step>
+
+  <Step title="Set User Details">
+    - **User name:** `vercel-frontend-service`
+    - Leave **Provide user access to the AWS Management Console** unchecked (this is a programmatic access user)
+  </Step>
+
+  <Step title="Set Permissions">
+    Choose **Attach policies directly** and click **Create policy**.
+
+    In the policy editor, switch to **JSON** tab and paste:
+
+    ```json
+    {
+      "Version": "2012-10-17",
+      "Statement": [
+        {
+          "Effect": "Allow",
+          "Action": [
+            "s3:PutObject",
+            "s3:GetObject",
+            "s3:ListBucket",
+            "s3:DeleteObject"
+          ],
+          "Resource": [
+            "arn:aws:s3:::vercel-frontend",
+            "arn:aws:s3:::vercel-frontend/*"
+          ]
+        }
+      ]
+    }
+    ```
+
+    <Note>
+      This policy grants minimum required permissions:
+      - `PutObject`: Upload files to S3
+      - `GetObject`: Download files from S3
+      - `ListBucket`: List objects in bucket
+      - `DeleteObject`: Delete files (optional, for cleanup)
+    </Note>
+
+    Name the policy `VercelFrontendS3Access` and create it.
+  </Step>
+
+  <Step title="Attach Policy to User">
+    Return to the user creation flow, refresh the policy list, and attach `VercelFrontendS3Access` to your user.
+  </Step>
+
+  <Step title="Create Access Keys">
+    After creating the user:
+    1. Click on the user name
+    2. Go to **Security credentials** tab
+    3. Click **Create access key**
+    4. Select **Application running outside AWS**
+    5. Click **Next** and **Create access key**
+
+    <Warning>
+      Save your credentials now! You won't be able to see the secret access key again.
+    </Warning>
+
+    Copy:
+    - **Access key ID** (e.g., `AKIAIOSFODNN7EXAMPLE`)
+    - **Secret access key** (e.g., `wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY`)
+  </Step>
+</Steps>
+
+## Step 3: Set Environment Variables
+
+Add your AWS credentials to your environment:
+
+```bash .env
+AWS_ACCESS_KEY_ID=AKIAIOSFODNN7EXAMPLE
+AWS_SECRET_ACCESS_KEY=wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY
+AWS_REGION=us-east-1
+```
+
+See [Environment Variables](/configuration/environment-variables) for detailed setup instructions.
+
+## Step 4: Test Your Configuration
+
+<Steps>
+  <Step title="Install AWS CLI">
+    <CodeGroup>
+      ```bash macOS
+      brew install awscli
+      ```
+
+      ```bash Linux
+      curl "https://awscli.amazonaws.com/awscli-exe-linux-x86_64.zip" -o "awscliv2.zip"
+      unzip awscliv2.zip
+      sudo ./aws/install
+      ```
+
+      ```bash Windows
+      # Download and run the AWS CLI MSI installer from:
+      # https://awscli.amazonaws.com/AWSCLIV2.msi
+      ```
+    </CodeGroup>
+  </Step>
+
+  <Step title="Configure AWS CLI">
+    ```bash
+    aws configure
+    ```
+
+    Enter your credentials when prompted:
+    - AWS Access Key ID: `[your-access-key-id]`
+    - AWS Secret Access Key: `[your-secret-access-key]`
+    - Default region name: `us-east-1` (or your region)
+    - Default output format: `json`
+  </Step>
+
+  <Step title="Test S3 Access">
+    Create a test file and upload it:
+
+    ```bash
+    echo "test" > test.txt
+    aws s3 cp test.txt s3://vercel-frontend/test.txt
+    ```
+
+    List bucket contents:
+
+    ```bash
+    aws s3 ls s3://vercel-frontend/
+    ```
+
+    Download the file:
+
+    ```bash
+    aws s3 cp s3://vercel-frontend/test.txt downloaded.txt
+    ```
+
+    Clean up:
+
+    ```bash
+    aws s3 rm s3://vercel-frontend/test.txt
+    rm test.txt downloaded.txt
+    ```
+
+    <Note>
+      If all commands succeed, your AWS configuration is working correctly.
+    </Note>
+  </Step>
+</Steps>
+
+## Bucket Structure
+
+The platform uses the following S3 folder structure:
+
+```
+vercel-frontend/
+├── output/
+│   └── {randomId}/          # Cloned repository files
+│       ├── src/
+│       ├── package.json
+│       └── ...
+└── dist/
+    └── {randomId}/          # Built artifacts
+        ├── index.html
+        ├── assets/
+        └── ...
+```
+
+- **`output/{randomId}/`**: Stores uploaded project source files
+- **`dist/{randomId}/`**: Stores final built artifacts ready for deployment
+
+## Security Best Practices
+
+<AccordionGroup>
+  <Accordion title="Rotate Access Keys Regularly">
+    Create new access keys every 90 days and delete old ones:
+
+    ```bash
+    aws iam create-access-key --user-name vercel-frontend-service
+    aws iam delete-access-key --user-name vercel-frontend-service --access-key-id OLD_KEY_ID
+    ```
+  </Accordion>
+
+  <Accordion title="Enable S3 Bucket Logging">
+    Track access to your bucket:
+
+    ```bash
+    aws s3api put-bucket-logging --bucket vercel-frontend \
+      --bucket-logging-status file://logging.json
+    ```
+
+    Where `logging.json` contains:
+
+    ```json logging.json
+    {
+      "LoggingEnabled": {
+        "TargetBucket": "your-logging-bucket",
+        "TargetPrefix": "vercel-frontend-logs/"
+      }
+    }
+    ```
+  </Accordion>
+
+  <Accordion title="Enable S3 Versioning">
+    Protect against accidental deletions:
+
+    ```bash
+    aws s3api put-bucket-versioning --bucket vercel-frontend \
+      --versioning-configuration Status=Enabled
+    ```
+  </Accordion>
+
+  <Accordion title="Use IAM Roles for EC2">
+    If running on EC2, use IAM roles instead of access keys:
+
+    1. Create an IAM role with the S3 policy
+    2. Attach the role to your EC2 instance
+    3. Remove `AWS_ACCESS_KEY_ID` and `AWS_SECRET_ACCESS_KEY` environment variables
+
+    The AWS SDK will automatically use the instance role.
+  </Accordion>
+</AccordionGroup>
+
+## Troubleshooting
+
+<AccordionGroup>
+  <Accordion title="Access Denied Errors">
+    **Error:** `AccessDenied: Access Denied`
+
+    **Solutions:**
+    - Verify IAM policy includes required actions (`s3:PutObject`, `s3:GetObject`, `s3:ListBucket`)
+    - Check bucket name in policy ARN matches actual bucket name
+    - Ensure bucket policy doesn't deny access
+    - Verify credentials are active: `aws sts get-caller-identity`
+  </Accordion>
+
+  <Accordion title="Invalid Access Key ID">
+    **Error:** `InvalidAccessKeyId: The AWS Access Key Id you provided does not exist`
+
+    **Solutions:**
+    - Verify `AWS_ACCESS_KEY_ID` is correct (20 characters, starts with `AKIA`)
+    - Check for extra whitespace in environment variables
+    - Ensure the IAM user still exists
+    - Verify the access key hasn't been deleted
+  </Accordion>
+
+  <Accordion title="Region Errors">
+    **Error:** `PermanentRedirect: The bucket is in this region: us-west-2`
+
+    **Solutions:**
+    - Update `AWS_REGION` to match your bucket's actual region
+    - Check bucket region: `aws s3api get-bucket-location --bucket vercel-frontend`
+  </Accordion>
+
+  <Accordion title="Bucket Not Found">
+    **Error:** `NoSuchBucket: The specified bucket does not exist`
+
+    **Solutions:**
+    - Verify bucket name is exactly `vercel-frontend` (case-sensitive)
+    - Check bucket exists: `aws s3 ls`
+    - Create bucket if missing: `aws s3 mb s3://vercel-frontend --region us-east-1`
+  </Accordion>
+</AccordionGroup>
+
+## Next Steps
+
+<CardGroup cols={2}>
+  <Card title="Environment Variables" icon="gear" href="/configuration/environment-variables">
+    Configure all required environment variables
+  </Card>
+  <Card title="Redis Setup" icon="database" href="/configuration/redis-setup">
+    Set up Redis for build queue management
+  </Card>
+</CardGroup>

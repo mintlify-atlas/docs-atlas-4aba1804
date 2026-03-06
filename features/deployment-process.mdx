@@ -1,0 +1,248 @@
+---
+title: Deployment Process
+description: Understanding the end-to-end deployment flow from repository submission to live hosting
+---
+
+## Overview
+
+The deployment process is an end-to-end workflow that takes a repository URL and transforms it into a live, hosted application. The system handles cloning, uploading, queuing, building, and deploying your project automatically.
+
+## Architecture Flow
+
+```
+User Submits URL → Upload Service → S3 Storage → Redis Queue → Deploy Service → Build & Host
+```
+
+<Steps>
+  <Step title="Repository Submission">
+    User submits a repository URL via the `/get/url` endpoint
+    
+    ```typescript
+    POST /get/url
+    {
+      "url": "https://github.com/user/repo.git"
+    }
+    ```
+  </Step>
+
+  <Step title="ID Generation & Cloning">
+    The system generates a unique 10-character random ID and clones the repository
+    
+    **Implementation:** `upload-service/src/server.ts:17-26`
+    
+    ```typescript
+    const randomId = generateRandomId()  // e.g., "aB3xK9mP2q"
+    const clonePath = path.join(distPath, 'output', randomId)
+    
+    await git.clone(repoUrl, clonePath)
+    ```
+    
+    <Info>
+      The `generateRandomId()` function uses alphanumeric characters (A-Z, a-z, 0-9) to create collision-resistant identifiers.
+    </Info>
+  </Step>
+
+  <Step title="File Collection">
+    All files are collected while respecting `.gitignore` rules
+    
+    **Implementation:** `upload-service/src/utils/getAllFiles.ts:5-47`
+    
+    ```typescript
+    const files = getAllFiles(clonePath)
+    ```
+    
+    The `getAllFiles` function:
+    - Reads the project's `.gitignore` file
+    - Recursively traverses directories
+    - Filters out ignored files (node_modules, .env, etc.)
+    - Returns full file paths for upload
+  </Step>
+
+  <Step title="S3 Upload">
+    All project files are uploaded to S3 in parallel
+    
+    **Implementation:** `upload-service/src/server.ts:32-41`
+    
+    ```typescript
+    const uploadPromises = files.map(async (localFilePath) => {
+      const relativePath = path.relative(clonePath, localFilePath)
+      const s3Key = path.posix.join('output', randomId, relativePath)
+      return uploadFiles(s3Key, localFilePath)
+    });
+    
+    await Promise.all(uploadPromises);
+    ```
+    
+    **S3 Key Structure:**
+    ```
+    output/{randomId}/src/index.ts
+    output/{randomId}/package.json
+    output/{randomId}/public/logo.png
+    ```
+  </Step>
+
+  <Step title="Queue Insertion">
+    The deployment ID is pushed to Redis queue for processing
+    
+    **Implementation:** `upload-service/src/utils/buildQueue.ts:9-17`
+    
+    ```typescript
+    await client.LPUSH('build-queue', randomId)
+    ```
+    
+    <Note>
+      The upload service immediately returns success to the user after queuing, allowing asynchronous build processing.
+    </Note>
+  </Step>
+
+  <Step title="Response">
+    The upload service returns the deployment ID to the user
+    
+    ```json
+    {
+      "success": true,
+      "id": "aB3xK9mP2q"
+    }
+    ```
+    
+    Users can track their deployment using this ID.
+  </Step>
+</Steps>
+
+## Deploy Service Flow
+
+While the upload service handles the initial submission, the deploy service processes queued builds:
+
+<Steps>
+  <Step title="Queue Listening">
+    Deploy service continuously listens for new deployments
+    
+    **Implementation:** `deploy-service/src/server.ts:11-27`
+    
+    ```typescript
+    while (1) {
+      const response = await client.blPop(
+        commandOptions({ isolated: true }),
+        'build-queue',
+        0
+      )
+      // Process deployment...
+    }
+    ```
+  </Step>
+
+  <Step title="Download from S3">
+    Source files are downloaded from S3 to the deploy service
+    
+    ```typescript
+    await downloadS3Folder(`output/${response.element}`)
+    ```
+  </Step>
+
+  <Step title="Docker Build">
+    Project is built in an isolated Docker container
+    
+    ```typescript
+    await buildProject(response.element)
+    ```
+  </Step>
+
+  <Step title="Upload Built Assets">
+    Final build output is uploaded back to S3 for hosting
+    
+    ```typescript
+    await copyFinalDist(response.element)
+    ```
+  </Step>
+</Steps>
+
+## Complete Deployment Timeline
+
+<Accordion title="Detailed Timeline Example">
+  1. **T+0s**: User submits repository URL
+  2. **T+2s**: Repository cloned to `dist/output/aB3xK9mP2q`
+  3. **T+3s**: 150 files collected (excluding node_modules)
+  4. **T+8s**: All files uploaded to S3 (`output/aB3xK9mP2q/*`)
+  5. **T+8.1s**: ID pushed to Redis queue
+  6. **T+8.2s**: User receives deployment ID
+  7. **T+8.3s**: Deploy service picks up from queue
+  8. **T+10s**: Source files downloaded from S3
+  9. **T+15s**: Docker container created and build started
+  10. **T+45s**: Build completes, output copied from container
+  11. **T+50s**: Built assets uploaded to `dist/aB3xK9mP2q/*`
+  12. **T+50s**: Deployment live at `https://{id}.yourplatform.com`
+</Accordion>
+
+## Error Handling
+
+The system includes robust error handling at each stage:
+
+<Tabs>
+  <Tab title="Clone Errors">
+    **Implementation:** `upload-service/src/server.ts:46-49`
+    
+    ```typescript
+    catch (error) {
+      console.error('Clone error:', error)
+      res.status(500).json({ error: 'Failed to clone repository' })
+    }
+    ```
+    
+    Common scenarios:
+    - Invalid repository URL
+    - Private repositories without credentials
+    - Network timeouts
+  </Tab>
+  
+  <Tab title="Upload Errors">
+    **Implementation:** `upload-service/src/utils/uploadFiles.ts:24-26`
+    
+    ```typescript
+    catch (error) {
+      console.error('Upload error:', error)
+    }
+    ```
+    
+    Handles S3 permission issues and network failures.
+  </Tab>
+  
+  <Tab title="Build Errors">
+    **Implementation:** `deploy-service/src/utils/buildProject.ts:33-38`
+    
+    ```typescript
+    if (error) {
+      console.error(`Execution error: ${error}`);
+      reject(error);
+      return;
+    }
+    ```
+    
+    Captures:
+    - Missing dependencies
+    - Build script failures
+    - Docker errors
+  </Tab>
+</Tabs>
+
+## Key Implementation Files
+
+| File | Purpose | Key Functions |
+|------|---------|---------------|
+| `upload-service/src/server.ts` | Main upload endpoint | Repository cloning, file upload orchestration |
+| `upload-service/src/utils/getAllFiles.ts` | File collection | Recursive traversal with .gitignore support |
+| `upload-service/src/utils/uploadFiles.ts` | S3 uploads | Stream-based file uploads |
+| `upload-service/src/utils/buildQueue.ts` | Queue operations | Redis LPUSH for queue insertion |
+| `deploy-service/src/server.ts` | Queue consumer | Continuous build queue processing |
+| `deploy-service/src/utils/downloadS3Folder.ts` | S3 downloads | Batch file downloads from S3 |
+| `deploy-service/src/utils/buildProject.ts` | Docker builds | Container-based project building |
+
+## Next Steps
+
+<CardGroup cols={2}>
+  <Card title="Build System" icon="docker" href="/features/build-system">
+    Learn about Docker-based build isolation
+  </Card>
+  <Card title="Queue Management" icon="layer-group" href="/features/queue-management">
+    Understand Redis queue operations
+  </Card>
+</CardGroup>

@@ -1,0 +1,222 @@
+---
+title: Introduction
+description: A high-performance deployment platform for frontend applications powered by Bun
+---
+
+## What is Vercel For Frontend?
+
+Vercel For Frontend is a self-hosted deployment platform that automates the entire lifecycle of frontend application deployments. Built with Bun for blazing-fast performance, it provides a Vercel-like experience for deploying frontend applications from GitHub repositories with zero configuration.
+
+Simply provide a GitHub repository URL, and the platform handles everything: cloning, building, and hosting your application on AWS S3 with automatic CDN distribution.
+
+## Key Benefits
+
+<CardGroup cols={2}>
+  <Card title="Zero Configuration" icon="bolt">
+    Deploy React, Vue, or any frontend framework without configuration files or build scripts.
+  </Card>
+  <Card title="Automated Builds" icon="gears">
+    Dockerized build environment ensures consistent builds across all projects.
+  </Card>
+  <Card title="S3 Hosting" icon="cloud">
+    Static files are automatically uploaded to S3 for reliable, scalable hosting.
+  </Card>
+  <Card title="Fast Runtime" icon="rocket">
+    Built on Bun for superior performance in file operations and HTTP handling.
+  </Card>
+</CardGroup>
+
+## Architecture Overview
+
+The platform consists of two primary microservices working in concert:
+
+### Upload Service
+
+The upload service is the entry point for all deployments. It accepts GitHub repository URLs via REST API and orchestrates the initial deployment phase.
+
+**Key responsibilities:**
+- Accept GitHub repository URLs via `/get/url` endpoint
+- Clone repositories using `simple-git`
+- Scan project files while respecting `.gitignore` patterns
+- Upload source files to S3 under `output/{id}` prefix
+- Queue build jobs in Redis for processing
+
+```typescript
+// upload-service/src/server.ts:17
+app.post('/get/url', async (req, res) => {
+    const repoUrl = req.body.url
+    const randomId = generateRandomId()
+
+    const clonePath = path.join(distPath, 'output', randomId)
+
+    try {
+        // Clone the repository.
+        await git.clone(repoUrl, clonePath)
+        const files = getAllFiles(clonePath)
+
+        const uploadPromises = files.map(async (localFilePath) => {
+            const relativePath = path.relative(clonePath, localFilePath)
+            const s3Key = path.posix.join('output', randomId, relativePath)
+            return uploadFiles(s3Key, localFilePath)
+        });
+
+        await Promise.all(uploadPromises);
+
+        buildQueue(randomId)
+
+        res.json({ success: true, id: randomId })
+    } catch (error) {
+        console.error('Clone error:', error)
+        res.status(500).json({ error: 'Failed to clone repository' })
+    }
+})
+```
+
+### Deploy Service
+
+The deploy service is a background worker that processes build jobs from the Redis queue. It downloads source files from S3, builds them in isolated Docker containers, and uploads the production-ready files back to S3.
+
+**Key responsibilities:**
+- Poll Redis queue for pending build jobs using `blPop`
+- Download project source from S3 `output/{id}` prefix
+- Build projects in isolated Docker containers
+- Support both `/build` and `/dist` output directories
+- Upload production builds to S3 under `dist/{id}` prefix
+
+```typescript
+// deploy-service/src/server.ts:11
+export async function getIdFromQueue() {
+    while (1) {
+        const response = await client.blPop(
+            commandOptions({ isolated: true }),
+            'build-queue',
+            0
+        )
+
+        console.log('Response', response)
+        if (response) {
+            await downloadS3Folder(`output/${response.element}`)
+            await buildProject(response.element)
+            await copyFinalDist(response.element);
+        }
+    }
+}
+```
+
+### Docker Build Process
+
+Each project is built in a fresh Docker container using Node.js 20 Alpine. The build process dynamically creates a Dockerfile, executes the build, extracts the output, and cleans up all resources:
+
+```typescript
+// deploy-service/src/utils/buildProject.ts:12
+const dockerFilePath = path.join(projectPath, 'Dockerfile')
+fs.writeFileSync(dockerFilePath, `
+FROM node:20-alpine AS builder
+WORKDIR /app
+COPY package*.json ./
+RUN npm install
+COPY . .
+RUN npm run build
+`)
+```
+
+<Note>
+The build process automatically detects whether your framework outputs to `/build` or `/dist` directories, supporting React, Vue, Vite, and other popular frameworks.
+</Note>
+
+## Data Flow
+
+<Steps>
+  <Step title="Repository Submission">
+    Client sends GitHub repository URL to Upload Service via POST request to `/get/url`.
+  </Step>
+  
+  <Step title="Clone & Upload">
+    Upload Service clones the repository, scans files respecting `.gitignore`, and uploads to S3 `output/{randomId}` bucket.
+  </Step>
+  
+  <Step title="Queue Job">
+    Upload Service pushes deployment job to Redis `build-queue` and returns the unique deployment ID to the client.
+  </Step>
+  
+  <Step title="Build Processing">
+    Deploy Service polls Redis queue, downloads source from S3, and builds in a Docker container.
+  </Step>
+  
+  <Step title="Production Upload">
+    Built files are uploaded to S3 `dist/{id}` prefix, making them publicly accessible via S3 static hosting.
+  </Step>
+</Steps>
+
+## Technology Stack
+
+**Runtime & Framework:**
+- **Bun** - JavaScript runtime for both services
+- **Express** - HTTP server framework
+- **TypeScript** - Type-safe development
+
+**Infrastructure:**
+- **AWS S3** - Object storage for source files and production builds
+- **Redis** - Message queue for build job coordination
+- **Docker** - Isolated build environments
+
+**Key Libraries:**
+- `simple-git` - Git operations (upload-service/src/server.ts:3)
+- `aws-sdk` - S3 operations (upload-service/src/utils/uploadFiles.ts:1)
+- `redis` - Queue management (upload-service/src/utils/buildQueue.ts:1)
+- `ignore` - Gitignore pattern matching (upload-service/src/utils/getAllFiles.ts:2)
+
+## Deployment Identifiers
+
+Each deployment receives a unique 10-character alphanumeric identifier generated using a cryptographically random selection:
+
+```typescript
+// upload-service/src/utils/randomId.ts:1
+export function generateRandomId(): string {
+    const characters = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789';
+    let randomId = '';
+
+    for (let i = 0; i < 10; i++) {
+        const randomIndex = Math.floor(Math.random() * characters.length);
+        randomId += characters.charAt(randomIndex);
+    }
+
+    return randomId;
+}
+```
+
+This ID is used throughout the system to track deployments:
+- S3 source path: `output/{id}/`
+- S3 production path: `dist/{id}/`
+- Docker container names: `frontend-build-{id}`
+
+## S3 Storage Structure
+
+```
+vercel-frontend/
+├── output/
+│   └── {deployment-id}/
+│       ├── src/
+│       ├── package.json
+│       └── ... (source files)
+└── dist/
+    └── {deployment-id}/
+        ├── index.html
+        ├── assets/
+        └── ... (production build)
+```
+
+<Warning>
+The S3 bucket name is hardcoded as `vercel-frontend` in both services. You'll need to create this bucket or modify the bucket name in the source code before deployment.
+</Warning>
+
+## Next Steps
+
+<CardGroup cols={2}>
+  <Card title="Quick Start" icon="play" href="/quickstart">
+    Get your platform running in 10 minutes
+  </Card>
+  <Card title="API Reference" icon="code" href="/api/upload-endpoint">
+    Explore the REST API endpoints
+  </Card>
+</CardGroup>

@@ -1,0 +1,315 @@
+---
+title: 'Deployment Status'
+description: 'Track and manage your deployments using the deployment ID'
+---
+
+## Overview
+
+When you submit a deployment via the `/get/url` endpoint, you receive a unique deployment ID. This ID is used to reference your deployment throughout its lifecycle.
+
+## Deployment ID
+
+The deployment ID is a randomly generated string returned in the upload response:
+
+```json
+{
+  "success": true,
+  "id": "abc123def456"
+}
+```
+
+<Note>
+  Store this ID immediately after receiving it. You'll need it to access your deployment.
+</Note>
+
+## Deployment Process
+
+After submitting your repository URL, the following process occurs:
+
+### 1. Repository Cloning
+
+The system clones your Git repository to temporary storage.
+
+### 2. File Upload
+
+All repository files are uploaded to S3 storage under a path prefixed with your deployment ID:
+
+```
+output/{deployment-id}/path/to/file.html
+```
+
+### 3. Build Queue
+
+The deployment ID is added to a Redis build queue for processing by build workers.
+
+### 4. Asynchronous Build
+
+A build worker picks up your deployment from the queue and processes it asynchronously.
+
+## Accessing Your Deployment
+
+### Deployment URL Structure
+
+Once your deployment is built and deployed, it will be accessible at:
+
+```
+http://{deployment-id}.your-domain.com
+```
+
+Or via a path-based URL:
+
+```
+http://your-domain.com/{deployment-id}
+```
+
+<Info>
+  The exact URL structure depends on your infrastructure configuration. Check with your platform administrator for the specific URL pattern.
+</Info>
+
+## Status Tracking
+
+Currently, the API does not expose a dedicated status endpoint. However, you can implement status tracking using these approaches:
+
+### Option 1: Poll Deployment URL
+
+Periodically check if your deployment URL is accessible:
+
+<CodeGroup>
+
+```javascript JavaScript
+async function waitForDeployment(deploymentId, maxAttempts = 30) {
+  const deploymentUrl = `http://${deploymentId}.your-domain.com`;
+  
+  for (let i = 0; i < maxAttempts; i++) {
+    try {
+      const response = await fetch(deploymentUrl);
+      if (response.ok) {
+        console.log('Deployment is live!');
+        return true;
+      }
+    } catch (error) {
+      // Deployment not ready yet
+    }
+    
+    // Wait 5 seconds before next attempt
+    await new Promise(resolve => setTimeout(resolve, 5000));
+  }
+  
+  console.log('Deployment timeout');
+  return false;
+}
+
+// Usage
+const result = await fetch('http://localhost:3000/get/url', {
+  method: 'POST',
+  headers: { 'Content-Type': 'application/json' },
+  body: JSON.stringify({ url: 'https://github.com/user/repo.git' })
+});
+
+const { id } = await result.json();
+await waitForDeployment(id);
+```
+
+```python Python
+import requests
+import time
+
+def wait_for_deployment(deployment_id, max_attempts=30):
+    deployment_url = f"http://{deployment_id}.your-domain.com"
+    
+    for i in range(max_attempts):
+        try:
+            response = requests.get(deployment_url)
+            if response.ok:
+                print('Deployment is live!')
+                return True
+        except requests.exceptions.RequestException:
+            # Deployment not ready yet
+            pass
+        
+        # Wait 5 seconds before next attempt
+        time.sleep(5)
+    
+    print('Deployment timeout')
+    return False
+
+# Usage
+response = requests.post(
+    'http://localhost:3000/get/url',
+    json={'url': 'https://github.com/user/repo.git'}
+)
+
+deployment_id = response.json()['id']
+wait_for_deployment(deployment_id)
+```
+
+</CodeGroup>
+
+### Option 2: Monitor Redis Queue
+
+If you have access to the Redis instance, you can monitor the build queue:
+
+```bash
+# Check queue length
+redis-cli LLEN build-queue
+
+# View items in queue
+redis-cli LRANGE build-queue 0 -1
+```
+
+### Option 3: Check S3 Storage
+
+Verify that build artifacts have been uploaded to S3:
+
+```bash
+aws s3 ls s3://your-bucket/output/{deployment-id}/
+```
+
+## Best Practices
+
+<AccordionGroup>
+
+<Accordion title="Store Deployment IDs">
+  Always store deployment IDs in your database or application state. You'll need them to reference deployments later.
+  
+  ```javascript
+  const { id } = await deployRepository(repoUrl);
+  await db.deployments.create({
+    id,
+    repoUrl,
+    createdAt: new Date(),
+    status: 'pending'
+  });
+  ```
+</Accordion>
+
+<Accordion title="Implement Retry Logic">
+  Network issues can cause deployments to fail. Implement retry logic with exponential backoff:
+  
+  ```javascript
+  async function deployWithRetry(url, maxRetries = 3) {
+    for (let i = 0; i < maxRetries; i++) {
+      try {
+        return await deployRepository(url);
+      } catch (error) {
+        if (i === maxRetries - 1) throw error;
+        await new Promise(r => setTimeout(r, 1000 * Math.pow(2, i)));
+      }
+    }
+  }
+  ```
+</Accordion>
+
+<Accordion title="Handle Errors Gracefully">
+  Always check for error responses and handle them appropriately:
+  
+  ```javascript
+  const response = await fetch('http://localhost:3000/get/url', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ url: repoUrl })
+  });
+  
+  const data = await response.json();
+  
+  if (response.ok && data.success) {
+    console.log('Deployment queued:', data.id);
+  } else {
+    console.error('Deployment failed:', data.error);
+  }
+  ```
+</Accordion>
+
+</AccordionGroup>
+
+## Example: Complete Deployment Flow
+
+Here's a complete example showing deployment submission and status tracking:
+
+```javascript
+class DeploymentClient {
+  constructor(apiUrl) {
+    this.apiUrl = apiUrl;
+  }
+  
+  async deploy(repoUrl) {
+    const response = await fetch(`${this.apiUrl}/get/url`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ url: repoUrl })
+    });
+    
+    if (!response.ok) {
+      const error = await response.json();
+      throw new Error(error.error || 'Deployment failed');
+    }
+    
+    const data = await response.json();
+    return data.id;
+  }
+  
+  async waitForDeployment(deploymentId, timeoutMs = 300000) {
+    const startTime = Date.now();
+    const deploymentUrl = `http://${deploymentId}.your-domain.com`;
+    
+    while (Date.now() - startTime < timeoutMs) {
+      try {
+        const response = await fetch(deploymentUrl);
+        if (response.ok) {
+          return {
+            status: 'success',
+            url: deploymentUrl,
+            duration: Date.now() - startTime
+          };
+        }
+      } catch (error) {
+        // Still building
+      }
+      
+      await new Promise(resolve => setTimeout(resolve, 5000));
+    }
+    
+    return {
+      status: 'timeout',
+      url: deploymentUrl,
+      duration: Date.now() - startTime
+    };
+  }
+  
+  async deployAndWait(repoUrl) {
+    console.log('Deploying repository...');
+    const deploymentId = await this.deploy(repoUrl);
+    console.log(`Deployment ID: ${deploymentId}`);
+    
+    console.log('Waiting for deployment to complete...');
+    const result = await this.waitForDeployment(deploymentId);
+    
+    if (result.status === 'success') {
+      console.log(`Deployment live at: ${result.url}`);
+      console.log(`Build time: ${result.duration}ms`);
+    } else {
+      console.log('Deployment timed out');
+    }
+    
+    return result;
+  }
+}
+
+// Usage
+const client = new DeploymentClient('http://localhost:3000');
+const result = await client.deployAndWait(
+  'https://github.com/username/my-website.git'
+);
+```
+
+## Future Enhancements
+
+The platform may add dedicated status tracking endpoints in the future:
+
+- `GET /deployment/{id}` - Get deployment details and status
+- `GET /deployment/{id}/logs` - View build logs
+- WebSocket endpoint for real-time status updates
+
+<Tip>
+  For production use, consider implementing a webhook system where the build worker notifies your application when deployments complete.
+</Tip>

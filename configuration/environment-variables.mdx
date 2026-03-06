@@ -1,0 +1,143 @@
+---
+title: Environment Variables
+description: Configure required environment variables for AWS S3 integration
+---
+
+Vercel For Frontend requires several environment variables to connect to AWS S3 for storage. These variables must be set before starting the services.
+
+## Required Variables
+
+The platform requires the following environment variables to function:
+
+### AWS Configuration
+
+<ParamField path="AWS_ACCESS_KEY_ID" type="string" required>
+  Your AWS IAM access key ID with S3 permissions
+  
+  Used in:
+  - `upload-service/src/utils/uploadFiles.ts:5`
+  - `deploy-service/src/utils/donwloadS3Folde.ts:6`
+</ParamField>
+
+<ParamField path="AWS_SECRET_ACCESS_KEY" type="string" required>
+  Your AWS IAM secret access key corresponding to the access key ID
+  
+  Used in:
+  - `upload-service/src/utils/uploadFiles.ts:6`
+  - `deploy-service/src/utils/donwloadS3Folde.ts:7`
+</ParamField>
+
+<ParamField path="AWS_REGION" type="string" required>
+  The AWS region where your S3 bucket is located (e.g., `us-east-1`, `us-west-2`)
+  
+  Used in:
+  - `upload-service/src/utils/uploadFiles.ts:7`
+  - `deploy-service/src/utils/donwloadS3Folde.ts:8`
+</ParamField>
+
+## S3 Bucket Configuration
+
+The platform uses a hardcoded S3 bucket name: **`vercel-frontend`**
+
+This bucket name is referenced in:
+- `upload-service/src/utils/uploadFiles.ts:20`
+- `deploy-service/src/utils/donwloadS3Folde.ts:16`
+- `deploy-service/src/utils/donwloadS3Folde.ts:44`
+- `deploy-service/src/utils/donwloadS3Folde.ts:76`
+
+<Warning>
+  Make sure your S3 bucket is named `vercel-frontend` or update the bucket name in the source code to match your bucket.
+</Warning>
+
+## Setting Environment Variables
+
+<Tabs>
+  <Tab title="Development (.env)">
+    Create a `.env` file in the root of each service directory:
+
+    ```bash
+    # .env file
+    AWS_ACCESS_KEY_ID=AKIAIOSFODNN7EXAMPLE
+    AWS_SECRET_ACCESS_KEY=wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY
+    AWS_REGION=us-east-1
+    ```
+
+    <Note>
+      Both `upload-service` and `deploy-service` need their own `.env` files with these variables.
+    </Note>
+  </Tab>
+
+  <Tab title="Production (Linux/macOS)">
+    Export environment variables in your shell:
+
+    ```bash
+    export AWS_ACCESS_KEY_ID="AKIAIOSFODNN7EXAMPLE"
+    export AWS_SECRET_ACCESS_KEY="wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY"
+    export AWS_REGION="us-east-1"
+    ```
+
+    Add these to your `~/.bashrc` or `~/.zshrc` for persistence.
+  </Tab>
+
+  <Tab title="Production (Windows)">
+    Set environment variables using Command Prompt:
+
+    ```cmd
+    setx AWS_ACCESS_KEY_ID "AKIAIOSFODNN7EXAMPLE"
+    setx AWS_SECRET_ACCESS_KEY "wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY"
+    setx AWS_REGION "us-east-1"
+    ```
+
+    Or using PowerShell:
+
+    ```powershell
+    [System.Environment]::SetEnvironmentVariable('AWS_ACCESS_KEY_ID', 'AKIAIOSFODNN7EXAMPLE', 'User')
+    [System.Environment]::SetEnvironmentVariable('AWS_SECRET_ACCESS_KEY', 'wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY', 'User')
+    [System.Environment]::SetEnvironmentVariable('AWS_REGION', 'us-east-1', 'User')
+    ```
+  </Tab>
+
+  <Tab title="Docker">
+    Pass environment variables when running containers:
+
+    ```bash
+    docker run -e AWS_ACCESS_KEY_ID="AKIAIOSFODNN7EXAMPLE" \
+      -e AWS_SECRET_ACCESS_KEY="wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY" \
+      -e AWS_REGION="us-east-1" \
+      your-image
+    ```
+
+    Or use a `.env` file with Docker Compose:
+
+    ```yaml docker-compose.yml
+    services:
+      upload-service:
+        env_file:
+          - .env
+    ```
+  </Tab>
+</Tabs>
+
+## Verifying Configuration
+
+After setting environment variables, verify they're accessible:
+
+```bash
+echo $AWS_ACCESS_KEY_ID
+echo $AWS_REGION
+```
+
+<Warning>
+  Never commit `.env` files or expose your AWS credentials in version control. Add `.env` to your `.gitignore` file.
+</Warning>
+
+## Next Steps
+
+<CardGroup cols={2}>
+  <Card title="AWS Setup" icon="aws" href="/configuration/aws-setup">
+    Configure your AWS S3 bucket and IAM credentials
+  </Card>
+  <Card title="Redis Setup" icon="database" href="/configuration/redis-setup">
+    Install and configure Redis for queue management
+  </Card>
+</CardGroup>

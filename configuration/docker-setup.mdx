@@ -1,0 +1,691 @@
+---
+title: Docker Setup
+description: Install and configure Docker for building frontend projects
+---
+
+Vercel For Frontend uses Docker to build frontend projects in isolated containers. The deploy service creates temporary Docker images for each project, runs the build, and extracts the output.
+
+## How Docker is Used
+
+The build process (`deploy-service/src/utils/buildProject.ts:22`) follows these steps:
+
+1. **Create Dockerfile**: Generates a Node.js 20 Alpine-based Dockerfile in the project directory
+2. **Build Image**: `docker build -t frontend-build-{id} .`
+3. **Create Container**: `docker create --name build-container-{id}`
+4. **Extract Build Output**: `docker cp` the `/app/build` or `/app/dist` folder
+5. **Cleanup**: Remove container and image
+
+<Info>
+  Docker must be installed and the daemon must be running for builds to work.
+</Info>
+
+## Installation
+
+<Tabs>
+  <Tab title="macOS">
+    <Steps>
+      <Step title="Download Docker Desktop">
+        Download Docker Desktop from [docker.com](https://www.docker.com/products/docker-desktop).
+      </Step>
+
+      <Step title="Install Docker">
+        1. Open the downloaded `.dmg` file
+        2. Drag Docker to Applications folder
+        3. Launch Docker from Applications
+        4. Follow the setup wizard
+      </Step>
+
+      <Step title="Start Docker">
+        Docker Desktop should start automatically. Look for the Docker icon in the menu bar.
+
+        <Note>
+          Allow Docker to access your filesystem when prompted.
+        </Note>
+      </Step>
+
+      <Step title="Verify Installation">
+        ```bash
+        docker --version
+        docker run hello-world
+        ```
+
+        You should see version information and a welcome message.
+      </Step>
+    </Steps>
+  </Tab>
+
+  <Tab title="Linux (Ubuntu/Debian)">
+    <Steps>
+      <Step title="Remove Old Versions">
+        ```bash
+        sudo apt-get remove docker docker-engine docker.io containerd runc
+        ```
+      </Step>
+
+      <Step title="Install Dependencies">
+        ```bash
+        sudo apt-get update
+        sudo apt-get install -y \
+          ca-certificates \
+          curl \
+          gnupg \
+          lsb-release
+        ```
+      </Step>
+
+      <Step title="Add Docker's Official GPG Key">
+        ```bash
+        sudo mkdir -p /etc/apt/keyrings
+        curl -fsSL https://download.docker.com/linux/ubuntu/gpg | \
+          sudo gpg --dearmor -o /etc/apt/keyrings/docker.gpg
+        ```
+      </Step>
+
+      <Step title="Set Up Repository">
+        ```bash
+        echo \
+          "deb [arch=$(dpkg --print-architecture) signed-by=/etc/apt/keyrings/docker.gpg] https://download.docker.com/linux/ubuntu \
+          $(lsb_release -cs) stable" | \
+          sudo tee /etc/apt/sources.list.d/docker.list > /dev/null
+        ```
+      </Step>
+
+      <Step title="Install Docker Engine">
+        ```bash
+        sudo apt-get update
+        sudo apt-get install -y docker-ce docker-ce-cli containerd.io docker-buildx-plugin docker-compose-plugin
+        ```
+      </Step>
+
+      <Step title="Start Docker Service">
+        ```bash
+        sudo systemctl start docker
+        sudo systemctl enable docker
+        ```
+      </Step>
+
+      <Step title="Verify Installation">
+        ```bash
+        sudo docker run hello-world
+        ```
+      </Step>
+    </Steps>
+  </Tab>
+
+  <Tab title="Linux (CentOS/RHEL)">
+    <Steps>
+      <Step title="Remove Old Versions">
+        ```bash
+        sudo yum remove docker docker-client docker-client-latest docker-common \
+          docker-latest docker-latest-logrotate docker-logrotate docker-engine
+        ```
+      </Step>
+
+      <Step title="Install Dependencies">
+        ```bash
+        sudo yum install -y yum-utils
+        ```
+      </Step>
+
+      <Step title="Add Docker Repository">
+        ```bash
+        sudo yum-config-manager --add-repo \
+          https://download.docker.com/linux/centos/docker-ce.repo
+        ```
+      </Step>
+
+      <Step title="Install Docker">
+        ```bash
+        sudo yum install -y docker-ce docker-ce-cli containerd.io docker-buildx-plugin docker-compose-plugin
+        ```
+      </Step>
+
+      <Step title="Start Docker Service">
+        ```bash
+        sudo systemctl start docker
+        sudo systemctl enable docker
+        ```
+      </Step>
+
+      <Step title="Verify Installation">
+        ```bash
+        sudo docker run hello-world
+        ```
+      </Step>
+    </Steps>
+  </Tab>
+
+  <Tab title="Windows">
+    <Steps>
+      <Step title="System Requirements">
+        Ensure you have:
+        - Windows 10 64-bit: Pro, Enterprise, or Education (Build 19041+)
+        - Or Windows 11 64-bit
+        - WSL 2 feature enabled
+        - Virtualization enabled in BIOS
+      </Step>
+
+      <Step title="Enable WSL 2">
+        Open PowerShell as Administrator:
+
+        ```powershell
+        wsl --install
+        ```
+
+        Restart your computer if prompted.
+      </Step>
+
+      <Step title="Download Docker Desktop">
+        Download from [docker.com](https://www.docker.com/products/docker-desktop).
+      </Step>
+
+      <Step title="Install Docker Desktop">
+        1. Run the installer
+        2. Ensure "Use WSL 2 instead of Hyper-V" is checked
+        3. Follow the installation wizard
+        4. Restart your computer
+      </Step>
+
+      <Step title="Start Docker Desktop">
+        Launch Docker Desktop from the Start menu. Wait for it to start completely.
+      </Step>
+
+      <Step title="Verify Installation">
+        Open PowerShell or CMD:
+
+        ```bash
+        docker --version
+        docker run hello-world
+        ```
+      </Step>
+    </Steps>
+  </Tab>
+</Tabs>
+
+## Post-Installation Setup
+
+### Add User to Docker Group (Linux)
+
+Avoid using `sudo` for every Docker command:
+
+```bash
+sudo usermod -aG docker $USER
+newgrp docker
+```
+
+Log out and back in for changes to take effect.
+
+<Warning>
+  The docker group grants privileges equivalent to root. Only add trusted users.
+</Warning>
+
+Test without sudo:
+
+```bash
+docker run hello-world
+```
+
+### Configure Docker Daemon
+
+Optimize Docker for build performance:
+
+<Tabs>
+  <Tab title="Linux">
+    Create or edit `/etc/docker/daemon.json`:
+
+    ```json /etc/docker/daemon.json
+    {
+      "log-driver": "json-file",
+      "log-opts": {
+        "max-size": "10m",
+        "max-file": "3"
+      },
+      "storage-driver": "overlay2",
+      "default-address-pools": [
+        {
+          "base": "172.17.0.0/16",
+          "size": 24
+        }
+      ]
+    }
+    ```
+
+    Restart Docker:
+
+    ```bash
+    sudo systemctl restart docker
+    ```
+  </Tab>
+
+  <Tab title="macOS/Windows">
+    Open Docker Desktop settings:
+
+    1. Click Docker icon in system tray
+    2. Go to Settings → Docker Engine
+    3. Add configuration:
+
+    ```json
+    {
+      "log-driver": "json-file",
+      "log-opts": {
+        "max-size": "10m",
+        "max-file": "3"
+      }
+    }
+    ```
+
+    4. Click "Apply & Restart"
+  </Tab>
+</Tabs>
+
+## Testing Docker for Builds
+
+Test the exact build process used by the platform:
+
+<Steps>
+  <Step title="Create Test Project">
+    ```bash
+    mkdir test-build
+    cd test-build
+    ```
+
+    Create a simple `package.json`:
+
+    ```json package.json
+    {
+      "name": "test-project",
+      "version": "1.0.0",
+      "scripts": {
+        "build": "echo 'Build successful' && mkdir -p dist && echo '<h1>Test</h1>' > dist/index.html"
+      }
+    }
+    ```
+  </Step>
+
+  <Step title="Create Dockerfile">
+    ```dockerfile Dockerfile
+    FROM node:20-alpine AS builder
+    WORKDIR /app
+    COPY package*.json ./
+    RUN npm install
+    COPY . .
+    RUN npm run build
+    ```
+
+    This matches the Dockerfile generated in `buildProject.ts:12`.
+  </Step>
+
+  <Step title="Build Image">
+    ```bash
+    docker build -t test-frontend-build .
+    ```
+
+    Should complete without errors.
+  </Step>
+
+  <Step title="Create Container">
+    ```bash
+    docker create --name test-container test-frontend-build
+    ```
+  </Step>
+
+  <Step title="Extract Build Output">
+    ```bash
+    docker cp test-container:/app/dist ./output
+    ```
+
+    Verify output:
+
+    ```bash
+    ls -la output/
+    cat output/index.html
+    ```
+  </Step>
+
+  <Step title="Cleanup">
+    ```bash
+    docker rm test-container
+    docker rmi test-frontend-build
+    rm -rf output
+    cd ..
+    rm -rf test-build
+    ```
+  </Step>
+</Steps>
+
+<Note>
+  If all steps succeed, Docker is correctly configured for the platform's build process.
+</Note>
+
+## Docker Daemon Management
+
+### Check Docker Status
+
+<CodeGroup>
+```bash Linux
+sudo systemctl status docker
+```
+
+```bash macOS/Windows
+docker info
+```
+</CodeGroup>
+
+### Start/Stop Docker
+
+<CodeGroup>
+```bash Linux
+# Start
+sudo systemctl start docker
+
+# Stop
+sudo systemctl stop docker
+
+# Restart
+sudo systemctl restart docker
+```
+
+```bash macOS/Windows
+# Start Docker Desktop from Applications
+# Or use:
+open -a Docker
+
+# Stop from Docker Desktop menu or:
+killall Docker
+```
+</CodeGroup>
+
+### Auto-Start on Boot
+
+<Tabs>
+  <Tab title="Linux">
+    ```bash
+    sudo systemctl enable docker
+    ```
+  </Tab>
+
+  <Tab title="macOS/Windows">
+    Open Docker Desktop Settings → General → Start Docker Desktop when you log in
+  </Tab>
+</Tabs>
+
+## Monitoring and Cleanup
+
+### Monitor Running Builds
+
+```bash
+# List running containers
+docker ps
+
+# Watch container logs
+docker logs -f build-container-{id}
+
+# Monitor resource usage
+docker stats
+```
+
+### Clean Up Build Artifacts
+
+The platform automatically removes containers and images after builds, but orphaned resources can accumulate:
+
+```bash
+# Remove stopped containers
+docker container prune -f
+
+# Remove unused images
+docker image prune -a -f
+
+# Remove build cache
+docker builder prune -f
+
+# Nuclear option (removes everything)
+docker system prune -a --volumes -f
+```
+
+<Warning>
+  `docker system prune` removes ALL unused containers, images, networks, and volumes. Use with caution.
+</Warning>
+
+### Automated Cleanup
+
+Schedule regular cleanup with cron (Linux/macOS):
+
+```bash
+crontab -e
+```
+
+Add:
+
+```cron
+# Clean Docker weekly on Sunday at 2 AM
+0 2 * * 0 docker system prune -f
+```
+
+## Troubleshooting
+
+<AccordionGroup>
+  <Accordion title="Docker Daemon Not Running">
+    **Error:** `Cannot connect to the Docker daemon`
+
+    **Solutions:**
+
+    <Tabs>
+      <Tab title="Linux">
+        ```bash
+        # Check status
+        sudo systemctl status docker
+
+        # Start daemon
+        sudo systemctl start docker
+
+        # Check logs
+        sudo journalctl -u docker -n 50
+        ```
+      </Tab>
+
+      <Tab title="macOS/Windows">
+        - Open Docker Desktop
+        - Wait for "Docker is running" status
+        - Check for updates in Docker Desktop settings
+        - Restart Docker Desktop
+      </Tab>
+    </Tabs>
+  </Accordion>
+
+  <Accordion title="Permission Denied">
+    **Error:** `permission denied while trying to connect to the Docker daemon socket`
+
+    **Solutions:**
+
+    ```bash
+    # Add user to docker group
+    sudo usermod -aG docker $USER
+
+    # Apply group changes
+    newgrp docker
+
+    # Or log out and back in
+
+    # Test
+    docker ps
+    ```
+  </Accordion>
+
+  <Accordion title="Build Failed">
+    **Error:** `Execution error: Command failed`
+
+    **Solutions:**
+    - Check Docker daemon is running: `docker info`
+    - Verify Node.js image is available: `docker pull node:20-alpine`
+    - Check disk space: `df -h`
+    - View build logs: `docker logs build-container-{id}`
+    - Test build manually:
+      ```bash
+      cd dist/output/{id}
+      docker build -t test-build .
+      ```
+  </Accordion>
+
+  <Accordion title="Out of Disk Space">
+    **Error:** `no space left on device`
+
+    **Solutions:**
+    - Check Docker disk usage: `docker system df`
+    - Clean up:
+      ```bash
+      docker system prune -a --volumes
+      ```
+    - Increase Docker Desktop disk limit (Settings → Resources → Disk image size)
+    - Move Docker data directory (Linux):
+      ```json /etc/docker/daemon.json
+      {
+        "data-root": "/new/path/to/docker"
+      }
+      ```
+  </Accordion>
+
+  <Accordion title="Build Timeout">
+    **Symptom:** Builds hang indefinitely
+
+    **Solutions:**
+    - Check container status: `docker ps -a | grep build-container`
+    - Kill stuck containers:
+      ```bash
+      docker kill build-container-{id}
+      docker rm build-container-{id}
+      ```
+    - Increase timeout in `buildProject.ts` (modify exec options)
+    - Check network connectivity for npm install
+  </Accordion>
+
+  <Accordion title="Cannot Remove Container">
+    **Error:** `Error response from daemon: container is running`
+
+    **Solutions:**
+    ```bash
+    # Stop container first
+    docker stop build-container-{id}
+
+    # Force remove
+    docker rm -f build-container-{id}
+
+    # If still stuck, restart Docker daemon
+    sudo systemctl restart docker
+    ```
+  </Accordion>
+</AccordionGroup>
+
+## Performance Optimization
+
+### Use BuildKit
+
+Enable Docker BuildKit for faster builds:
+
+```bash
+export DOCKER_BUILDKIT=1
+```
+
+Or configure permanently:
+
+```json /etc/docker/daemon.json
+{
+  "features": {
+    "buildkit": true
+  }
+}
+```
+
+### Allocate More Resources
+
+<Tabs>
+  <Tab title="macOS/Windows">
+    Docker Desktop → Settings → Resources:
+
+    - **CPUs**: Allocate 50-75% of available cores
+    - **Memory**: At least 4GB, 8GB recommended
+    - **Swap**: 2GB
+    - **Disk**: 60GB+ for multiple builds
+  </Tab>
+
+  <Tab title="Linux">
+    Docker uses host resources directly. Ensure sufficient:
+
+    ```bash
+    # Check resources
+    free -h
+    df -h
+    nproc
+    ```
+  </Tab>
+</Tabs>
+
+### Cache npm Dependencies
+
+Modify the Dockerfile to cache node_modules:
+
+```dockerfile
+FROM node:20-alpine AS builder
+WORKDIR /app
+
+# Copy package files first (cached layer)
+COPY package*.json ./
+RUN npm ci --only=production
+
+# Copy source (changes frequently)
+COPY . .
+RUN npm run build
+```
+
+## Security Best Practices
+
+<CardGroup cols={2}>
+  <Card title="Run Rootless Docker" icon="user-shield">
+    Run Docker daemon as non-root user:
+
+    ```bash
+    # Install rootless Docker
+    curl -fsSL https://get.docker.com/rootless | sh
+
+    # Enable at startup
+    systemctl --user enable docker
+    ```
+  </Card>
+
+  <Card title="Scan Images for Vulnerabilities" icon="shield-check">
+    ```bash
+    # Scan Node.js image
+    docker scan node:20-alpine
+
+    # Enable automatic scanning
+    docker scan --accept-license
+    ```
+  </Card>
+
+  <Card title="Limit Container Resources" icon="gauge">
+    Prevent resource exhaustion:
+
+    ```bash
+    docker run --memory="512m" --cpus="1.0" \
+      image-name
+    ```
+  </Card>
+
+  <Card title="Use Read-Only Filesystem" icon="lock">
+    ```bash
+    docker run --read-only \
+      --tmpfs /tmp \
+      image-name
+    ```
+  </Card>
+</CardGroup>
+
+## Next Steps
+
+<CardGroup cols={2}>
+  <Card title="Environment Variables" icon="gear" href="/configuration/environment-variables">
+    Configure all required environment variables
+  </Card>
+  <Card title="Quick Start" icon="rocket" href="/quickstart">
+    Start deploying your first project
+  </Card>
+</CardGroup>

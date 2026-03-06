@@ -1,0 +1,383 @@
+---
+title: Build System
+description: Docker-based build architecture for isolated, reproducible project builds
+---
+
+## Overview
+
+The build system uses Docker containers to provide isolated, reproducible builds for every deployment. Each project is built in its own ephemeral container, ensuring build consistency and preventing dependency conflicts.
+
+## Architecture
+
+```
+S3 Source Files → Download → Generate Dockerfile → Docker Build → 
+Extract Output → Upload to S3 → Cleanup
+```
+
+<Info>
+  All builds run in isolated Docker containers with Node.js 20 Alpine Linux, providing a lightweight and consistent build environment.
+</Info>
+
+## Build Process
+
+<Steps>
+  <Step title="Download Source Files">
+    The deploy service downloads the project source from S3
+    
+    **Implementation:** `deploy-service/src/utils/donwloadS3Folde.ts:13-64`
+    
+    ```typescript
+    export async function downloadS3Folder(S3Path: string) {
+      const allFiles = await s3.listObjectsV2({
+        Bucket: "vercel-frontend",
+        Prefix: S3Path
+      }).promise()
+      
+      const allPromise = allFiles.Contents?.map(async ({ Key }) => {
+        const finalOutput = path.join(distPath, Key)
+        const dirName = path.dirname(finalOutput)
+        
+        if (!fs.existsSync(dirName)) {
+          fs.mkdirSync(dirName, { recursive: true })
+        }
+        
+        const outputFile = fs.createWriteStream(finalOutput)
+        await s3.getObject({
+          Bucket: "vercel-frontend",
+          Key
+        }).createReadStream().pipe(outputFile)
+      })
+      
+      await Promise.all(allPromise)
+    }
+    ```
+    
+    The function:
+    - Lists all objects with the deployment ID prefix
+    - Creates necessary directory structure locally
+    - Downloads files in parallel using streams
+    - Recreates the original project structure
+  </Step>
+
+  <Step title="Generate Dockerfile">
+    A Dockerfile is dynamically created for each build
+    
+    **Implementation:** `deploy-service/src/utils/buildProject.ts:10-19`
+    
+    ```typescript
+    const dockerFilePath = path.join(projectPath, 'Dockerfile')
+    fs.writeFileSync(dockerFilePath, `
+FROM node:20-alpine AS builder
+WORKDIR /app
+COPY package*.json ./
+RUN npm install
+COPY . .
+RUN npm run build
+    `)
+    ```
+    
+    <Accordion title="Dockerfile Breakdown">
+      - **Base Image**: `node:20-alpine` - Lightweight Node.js 20 runtime (~170MB)
+      - **Stage Name**: `builder` - Multi-stage build preparation
+      - **Working Directory**: `/app` - Standard application directory
+      - **Dependency Installation**: Copies package files first for layer caching
+      - **Source Copy**: Copies entire project after dependencies
+      - **Build Command**: Runs `npm run build` from package.json
+    </Accordion>
+  </Step>
+
+  <Step title="Execute Docker Build">
+    The system runs a series of Docker commands to build and extract output
+    
+    **Implementation:** `deploy-service/src/utils/buildProject.ts:21-55`
+    
+    ```typescript
+    const buildCommand = `
+cd ${path.join(projectPath)} && 
+docker build -t frontend-build-${lowerCaseId} . && 
+docker create --name build-container-${lowerCaseId} frontend-build-${lowerCaseId} && 
+(docker cp build-container-${lowerCaseId}:/app/build ${projectPath}/build || 
+ docker cp build-container-${lowerCaseId}:/app/dist ${projectPath}/build) && 
+docker rm build-container-${lowerCaseId} && 
+docker rmi frontend-build-${lowerCaseId} && 
+rm -rf Dockerfile
+    `.replace(/\n/g, ' ');
+    
+    exec(buildCommand, (error, stdout, stderr) => {
+      // Handle build completion
+    });
+    ```
+  </Step>
+
+  <Step title="Extract Build Output">
+    The built files are copied from the container to the host filesystem
+    
+    The system tries two common output directories:
+    1. `/app/build` (Create React App, Next.js)
+    2. `/app/dist` (Vite, Vue, general bundlers)
+    
+    <Note>
+      The `||` operator ensures fallback: if `/app/build` doesn't exist, it tries `/app/dist` instead.
+    </Note>
+  </Step>
+
+  <Step title="Upload Built Assets">
+    Final build output is uploaded to S3 for hosting
+    
+    **Implementation:** `deploy-service/src/utils/buildProject.ts:73-81`
+    
+    ```typescript
+    export function copyFinalDist(id: string) {
+      const projectPath = path.join(process.cwd(), 'dist', `output/${id}/build`);
+      const allFiles = getAllFiles(projectPath);
+      
+      allFiles.forEach(fullFilePath => {
+        uploadFiles(
+          `dist/${id}/` + fullFilePath.slice(projectPath.length + 1),
+          fullFilePath
+        );
+      })
+    }
+    ```
+    
+    **S3 Structure:**
+    ```
+    dist/aB3xK9mP2q/index.html
+    dist/aB3xK9mP2q/assets/main.js
+    dist/aB3xK9mP2q/assets/style.css
+    ```
+  </Step>
+
+  <Step title="Cleanup">
+    Docker resources are automatically cleaned up
+    
+    The build command includes:
+    - `docker rm build-container-${lowerCaseId}` - Remove container
+    - `docker rmi frontend-build-${lowerCaseId}` - Remove image
+    - `rm -rf Dockerfile` - Remove generated Dockerfile
+  </Step>
+</Steps>
+
+## Docker Command Breakdown
+
+Let's examine each Docker command in detail:
+
+<Tabs>
+  <Tab title="docker build">
+    ```bash
+    docker build -t frontend-build-${lowerCaseId} .
+    ```
+    
+    **Purpose:** Builds the Docker image from the generated Dockerfile
+    
+    - `-t frontend-build-${lowerCaseId}`: Tags image with deployment ID
+    - `.`: Uses current directory as build context
+    - Example tag: `frontend-build-ab3xk9mp2q`
+    
+    **Output:** Docker image containing built application in `/app/build` or `/app/dist`
+  </Tab>
+  
+  <Tab title="docker create">
+    ```bash
+    docker create --name build-container-${lowerCaseId} frontend-build-${lowerCaseId}
+    ```
+    
+    **Purpose:** Creates a container without starting it (for file extraction)
+    
+    - `--name`: Names container for easy reference
+    - Container exists but doesn't run
+    - Allows `docker cp` to extract files
+    
+    **Why not run?** We only need the built files, not a running container.
+  </Tab>
+  
+  <Tab title="docker cp">
+    ```bash
+    docker cp build-container-${lowerCaseId}:/app/build ${projectPath}/build ||
+    docker cp build-container-${lowerCaseId}:/app/dist ${projectPath}/build
+    ```
+    
+    **Purpose:** Copies build output from container to host
+    
+    **Dual Path Strategy:**
+    - First tries `/app/build` (CRA, Next.js)
+    - Falls back to `/app/dist` (Vite, general)
+    - Both get copied to `${projectPath}/build` on host
+    
+    **Example:**
+    ```
+    Container: /app/build/index.html
+    Host: /home/deploy/dist/output/aB3xK9mP2q/build/index.html
+    ```
+  </Tab>
+  
+  <Tab title="Cleanup Commands">
+    ```bash
+    docker rm build-container-${lowerCaseId}
+    docker rmi frontend-build-${lowerCaseId}
+    rm -rf Dockerfile
+    ```
+    
+    **Purpose:** Clean up all build artifacts
+    
+    1. **Remove Container:** Deletes the stopped container
+    2. **Remove Image:** Deletes the built image (saves disk space)
+    3. **Remove Dockerfile:** Cleans up generated Dockerfile
+    
+    <Info>
+      Cleanup is crucial for preventing disk space exhaustion with many deployments.
+    </Info>
+  </Tab>
+</Tabs>
+
+## Build Output Handling
+
+The system intelligently handles different build tools and their output directories:
+
+<CardGroup cols={2}>
+  <Card title="/app/build" icon="react">
+    **Used by:**
+    - Create React App
+    - Next.js (`next build && next export`)
+    - Gatsby
+    - Some custom setups
+  </Card>
+  
+  <Card title="/app/dist" icon="box">
+    **Used by:**
+    - Vite
+    - Vue CLI
+    - Parcel
+    - Most bundlers
+  </Card>
+</CardGroup>
+
+```typescript
+// Fallback mechanism in build command
+(docker cp build-container-${lowerCaseId}:/app/build ${projectPath}/build || 
+ docker cp build-container-${lowerCaseId}:/app/dist ${projectPath}/build)
+```
+
+## Build Monitoring
+
+The build process includes real-time output streaming:
+
+**Implementation:** `deploy-service/src/utils/buildProject.ts:48-54`
+
+```typescript
+child.stdout?.on('data', function (data) {
+  console.log('stdout: ' + data);
+});
+
+child.stderr?.on('data', function (data) {
+  console.log('stderr: ' + data);
+});
+```
+
+**Captured Output:**
+- Docker build steps and layer caching
+- npm install progress and warnings
+- Build command output and errors
+- File sizes and optimization stats
+
+## Error Handling
+
+<Accordion title="Build Failure Scenarios">
+  **1. Docker Build Failures**
+  ```typescript
+  if (error) {
+    console.error(`Execution error: ${error}`);
+    reject(error);
+    return;
+  }
+  ```
+  
+  Common causes:
+  - Missing `package.json`
+  - Invalid dependencies
+  - Build script errors
+  - Out of memory
+  
+  **2. Missing Build Output**
+  - If neither `/app/build` nor `/app/dist` exists, docker cp fails
+  - Usually indicates build script didn't run or failed silently
+  
+  **3. Docker Daemon Issues**
+  - Docker not running
+  - Insufficient permissions
+  - Disk space exhausted
+  
+  **4. S3 Upload Failures**
+  ```typescript
+  catch (error) {
+    console.error('Upload error:', error)
+  }
+  ```
+  
+  Occurs during final asset upload to S3.
+</Accordion>
+
+## Performance Optimizations
+
+<Steps>
+  <Step title="Layer Caching">
+    Dependencies are copied before source code:
+    ```dockerfile
+    COPY package*.json ./
+    RUN npm install
+    COPY . .
+    ```
+    
+    This allows Docker to cache the dependency layer when only source code changes.
+  </Step>
+  
+  <Step title="Parallel File Operations">
+    Both S3 downloads and uploads use `Promise.all()` for parallelization:
+    ```typescript
+    await Promise.all(allPromise?.filter(x => x !== undefined));
+    ```
+  </Step>
+  
+  <Step title="Alpine Linux">
+    Using `node:20-alpine` reduces image size from ~900MB to ~170MB, speeding up builds.
+  </Step>
+  
+  <Step title="Immediate Cleanup">
+    Resources are cleaned up immediately after use, preventing disk space issues.
+  </Step>
+</Steps>
+
+## Build Environment Variables
+
+**AWS Configuration:**
+```typescript
+const s3 = new S3({
+  accessKeyId: process.env.AWS_ACCESS_KEY_ID,
+  secretAccessKey: process.env.AWS_SECRET_ACCESS_KEY,
+  region: process.env.AWS_REGION
+})
+```
+
+**Required Environment Variables:**
+- `AWS_ACCESS_KEY_ID`: AWS access credentials
+- `AWS_SECRET_ACCESS_KEY`: AWS secret credentials
+- `AWS_REGION`: S3 bucket region
+
+## Key Implementation Files
+
+| File | Lines | Purpose |
+|------|-------|----------|
+| `deploy-service/src/utils/buildProject.ts` | 1-81 | Core build logic, Docker orchestration |
+| `deploy-service/src/utils/donwloadS3Folde.ts` | 13-64 | S3 source download |
+| `deploy-service/src/server.ts` | 11-27 | Build queue consumer |
+
+## Next Steps
+
+<CardGroup cols={2}>
+  <Card title="Deployment Process" icon="rocket" href="/features/deployment-process">
+    Understand the full deployment pipeline
+  </Card>
+  <Card title="Queue Management" icon="list-check" href="/features/queue-management">
+    Learn how builds are queued and processed
+  </Card>
+</CardGroup>

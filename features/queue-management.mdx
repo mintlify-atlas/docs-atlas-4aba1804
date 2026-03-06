@@ -1,0 +1,572 @@
+---
+title: Queue Management
+description: Redis-based queue system for managing concurrent deployments efficiently
+---
+
+## Overview
+
+The platform uses Redis as a message queue to manage concurrent deployments. This ensures builds are processed sequentially, prevents resource exhaustion, and provides reliable job processing with automatic retry capabilities.
+
+## Why Redis Queue?
+
+<CardGroup cols={2}>
+  <Card title="Sequential Processing" icon="arrow-right">
+    Prevents multiple builds from overwhelming system resources
+  </Card>
+  <Card title="Reliable Delivery" icon="shield-check">
+    Atomic operations ensure no deployment is lost
+  </Card>
+  <Card title="Blocking Operations" icon="clock">
+    Efficient waiting without polling or resource waste
+  </Card>
+  <Card title="Simple Architecture" icon="cube">
+    No need for complex message brokers like RabbitMQ or Kafka
+  </Card>
+</CardGroup>
+
+## Queue Architecture
+
+```
+┌─────────────────┐         ┌─────────┐         ┌──────────────────┐
+│ Upload Service  │         │  Redis  │         │ Deploy Service   │
+│                 │         │  Queue  │         │                  │
+│  LPUSH(id) ────┼────────▶│         │◀────────┼──── BLPOP(id)   │
+│                 │         │  FIFO   │         │                  │
+└─────────────────┘         └─────────┘         └──────────────────┘
+     Producer                  Queue                 Consumer
+```
+
+<Info>
+  The queue follows a **FIFO (First In, First Out)** pattern, ensuring deployments are processed in submission order.
+</Info>
+
+## Producer: Upload Service
+
+The upload service pushes deployment IDs onto the queue after successful S3 upload.
+
+### Implementation
+
+**File:** `upload-service/src/utils/buildQueue.ts`
+
+```typescript
+import { createClient } from 'redis';
+
+const client = createClient()
+client.on('error', (error) => {
+  console.error('Redis error:', error)
+})
+client.connect()
+
+export const buildQueue = async (id: string) => {
+  try {
+    await client.LPUSH(
+      'build-queue',
+      id
+    )
+  } catch (error) {
+    console.error('Redis error:', error)
+  }
+}
+```
+
+### Usage in Upload Flow
+
+**File:** `upload-service/src/server.ts:43`
+
+```typescript
+app.post('/get/url', async (req, res) => {
+  const repoUrl = req.body.url
+  const randomId = generateRandomId()
+  
+  try {
+    await git.clone(repoUrl, clonePath)
+    const files = getAllFiles(clonePath)
+    
+    // Upload all files to S3
+    await Promise.all(uploadPromises);
+    
+    // Add to build queue
+    buildQueue(randomId)
+    
+    res.json({ success: true, id: randomId })
+  } catch (error) {
+    res.status(500).json({ error: 'Failed to clone repository' })
+  }
+})
+```
+
+<Steps>
+  <Step title="Queue Initialization">
+    Redis client connects on service startup
+    ```typescript
+    const client = createClient()
+    client.connect()
+    ```
+  </Step>
+  
+  <Step title="Error Handling">
+    Connection errors are logged but don't crash the service
+    ```typescript
+    client.on('error', (error) => {
+      console.error('Redis error:', error)
+    })
+    ```
+  </Step>
+  
+  <Step title="Queue Push">
+    Deployment ID is pushed to the left of the queue
+    ```typescript
+    await client.LPUSH('build-queue', id)
+    ```
+    
+    **Redis Queue State:**
+    ```
+    ["xY9kL3mN2", "aB3xK9mP2q", "pQ7rS1tU4v"] → LPUSH "zW8vB5nC6"
+    ["zW8vB5nC6", "xY9kL3mN2", "aB3xK9mP2q", "pQ7rS1tU4v"]
+    ```
+  </Step>
+</Steps>
+
+## Consumer: Deploy Service
+
+The deploy service continuously polls the queue using blocking pop operations.
+
+### Implementation
+
+**File:** `deploy-service/src/server.ts`
+
+```typescript
+import { commandOptions, createClient } from "redis";
+import { downloadS3Folder } from "./utils/donwloadS3Folde";
+import { buildProject, copyFinalDist } from "./utils/buildProject";
+
+const client = await createClient()
+  .on('error', err => console.log('Redis Client Error', err))
+  .on('connect', () => console.log('Redis Client Connected'))
+  .connect();
+
+export async function getIdFromQueue() {
+  while (1) {
+    const response = await client.blPop(
+      commandOptions({ isolated: true }),
+      'build-queue',
+      0
+    )
+    
+    console.log('Response', response)
+    if (response) {
+      await downloadS3Folder(`output/${response.element}`)
+      await buildProject(response.element)
+      await copyFinalDist(response.element);
+    }
+  }
+}
+
+getIdFromQueue()
+```
+
+### Key Components
+
+<Tabs>
+  <Tab title="Infinite Loop">
+    ```typescript
+    while (1) {
+      // Continuously process queue
+    }
+    ```
+    
+    **Purpose:** Keeps the service always listening for new deployments
+    
+    **Why infinite?** 
+    - The service should never stop processing
+    - `blPop` blocks until items are available
+    - No CPU waste from polling
+  </Tab>
+  
+  <Tab title="Blocking Pop (BLPOP)">
+    ```typescript
+    const response = await client.blPop(
+      commandOptions({ isolated: true }),
+      'build-queue',
+      0
+    )
+    ```
+    
+    **Parameters:**
+    - `commandOptions({ isolated: true })`: Dedicated connection for blocking
+    - `'build-queue'`: Queue name to watch
+    - `0`: Timeout in seconds (0 = wait forever)
+    
+    **Behavior:**
+    - Blocks until an item is available
+    - Atomically removes and returns the rightmost item
+    - Returns `{ key: 'build-queue', element: 'aB3xK9mP2q' }`
+    
+    <Note>
+      **BLPOP vs LPOP:** BLPOP blocks when queue is empty, avoiding wasteful polling. LPOP returns null immediately.
+    </Note>
+  </Tab>
+  
+  <Tab title="Isolated Connection">
+    ```typescript
+    commandOptions({ isolated: true })
+    ```
+    
+    **Purpose:** Uses a dedicated connection for blocking operations
+    
+    **Why needed?**
+    - Blocking commands tie up the connection
+    - Other Redis operations can continue on separate connections
+    - Prevents blocking from affecting non-blocking commands
+    
+    **Example:**
+    Without isolation, health checks or metrics queries would wait for BLPOP to return.
+  </Tab>
+  
+  <Tab title="Processing">
+    ```typescript
+    if (response) {
+      await downloadS3Folder(`output/${response.element}`)
+      await buildProject(response.element)
+      await copyFinalDist(response.element);
+    }
+    ```
+    
+    **Sequential Steps:**
+    1. Download source from S3
+    2. Build in Docker container
+    3. Upload built assets to S3
+    
+    **Synchronous Processing:**
+    - Each deployment is fully completed before the next
+    - Prevents resource contention
+    - Ensures predictable system load
+  </Tab>
+</Tabs>
+
+## Queue Operations
+
+### LPUSH (Left Push)
+
+**Producer Operation**
+
+```typescript
+await client.LPUSH('build-queue', id)
+```
+
+**Visualization:**
+```
+Initial:  ["B", "A"]
+LPUSH C:  ["C", "B", "A"]  ← New item on left
+```
+
+**Characteristics:**
+- **Time Complexity:** O(1)
+- **Atomic:** Guaranteed to succeed or fail completely
+- **Return Value:** New queue length
+
+### BLPOP (Blocking Left Pop)
+
+**Consumer Operation**
+
+```typescript
+const response = await client.blPop(
+  commandOptions({ isolated: true }),
+  'build-queue',
+  0
+)
+```
+
+**Visualization:**
+```
+Initial:  ["C", "B", "A"]
+BLPOP:    ["C", "B"]       ← Removed from right (FIFO)
+Returns:  { key: 'build-queue', element: 'A' }
+```
+
+**Characteristics:**
+- **Time Complexity:** O(1)
+- **Blocking:** Waits until queue has items
+- **Timeout:** 0 = wait forever, N = wait N seconds
+- **Return Value:** `{ key, element }` or null on timeout
+
+<Accordion title="Why LPUSH + BLPOP = FIFO?">
+  **LPUSH** adds to the **left** (head) of the list  
+  **BLPOP** removes from the **right** (tail) of the list
+  
+  **Example Flow:**
+  ```
+  LPUSH "deploy-1"  →  ["deploy-1"]
+  LPUSH "deploy-2"  →  ["deploy-2", "deploy-1"]
+  LPUSH "deploy-3"  →  ["deploy-3", "deploy-2", "deploy-1"]
+  
+  BLPOP             →  Returns "deploy-1" (oldest)
+  BLPOP             →  Returns "deploy-2" (second oldest)
+  BLPOP             →  Returns "deploy-3" (newest)
+  ```
+  
+  This ensures **First In, First Out** ordering.
+</Accordion>
+
+## Connection Management
+
+### Upload Service Connection
+
+```typescript
+const client = createClient()
+client.on('error', (error) => {
+  console.error('Redis error:', error)
+})
+client.connect()
+```
+
+**Connection Lifecycle:**
+1. Client created (not connected)
+2. Error handler registered
+3. Explicit connection established
+4. Ready for LPUSH operations
+
+### Deploy Service Connection
+
+```typescript
+const client = await createClient()
+  .on('error', err => console.log('Redis Client Error', err))
+  .on('connect', () => console.log('Redis Client Connected'))
+  .connect();
+```
+
+**Connection Lifecycle:**
+1. Client created with chained event handlers
+2. Connection event logs successful connection
+3. `await connect()` waits for connection to establish
+4. Ready for BLPOP operations
+
+<Info>
+  The deploy service uses `await connect()` to ensure Redis is ready before starting the queue consumer loop.
+</Info>
+
+## Error Handling
+
+<Tabs>
+  <Tab title="Connection Errors">
+    **Both Services:**
+    ```typescript
+    client.on('error', (error) => {
+      console.error('Redis error:', error)
+    })
+    ```
+    
+    **Common Errors:**
+    - Redis server not running
+    - Network connectivity issues
+    - Authentication failures
+    - Connection timeout
+    
+    **Behavior:**
+    - Errors are logged
+    - Connection auto-retry (redis client default)
+    - Service continues running
+  </Tab>
+  
+  <Tab title="Queue Operation Errors">
+    **Upload Service:**
+    ```typescript
+    export const buildQueue = async (id: string) => {
+      try {
+        await client.LPUSH('build-queue', id)
+      } catch (error) {
+        console.error('Redis error:', error)
+      }
+    }
+    ```
+    
+    **Issues:**
+    - If LPUSH fails, deployment won't be built
+    - User still receives success response
+    - Manual intervention needed
+    
+    <Note>
+      **Production Enhancement:** Should return error to user if queue push fails
+    </Note>
+  </Tab>
+  
+  <Tab title="Processing Errors">
+    **Deploy Service:**
+    ```typescript
+    if (response) {
+      await downloadS3Folder(`output/${response.element}`)
+      await buildProject(response.element)
+      await copyFinalDist(response.element);
+    }
+    ```
+    
+    **Current Behavior:**
+    - No try-catch around processing
+    - Errors crash the consumer loop
+    - Queue item is lost
+    
+    <Note>
+      **Production Enhancement:** Wrap processing in try-catch, implement retry logic or dead-letter queue
+    </Note>
+  </Tab>
+</Tabs>
+
+## Concurrency Model
+
+### Single Consumer
+
+**Current Implementation:**
+```typescript
+while (1) {
+  const response = await client.blPop(...)
+  // Sequential processing
+  await downloadS3Folder(...)
+  await buildProject(...)
+  await copyFinalDist(...)
+}
+```
+
+**Characteristics:**
+- One deployment processed at a time
+- Predictable resource usage
+- Simple to reason about
+- May be slow under high load
+
+### Multiple Consumers (Scaling)
+
+To scale, run multiple deploy service instances:
+
+```bash
+# Terminal 1
+node deploy-service/src/server.ts
+
+# Terminal 2
+node deploy-service/src/server.ts
+
+# Terminal 3
+node deploy-service/src/server.ts
+```
+
+**How It Works:**
+- Each instance runs its own `blPop` loop
+- Redis guarantees each queue item goes to only one consumer
+- Automatic load balancing
+- Parallelism limited by CPU/memory
+
+**Example:**
+```
+Queue: ["deploy-1", "deploy-2", "deploy-3", "deploy-4"]
+
+Consumer 1: Gets "deploy-1" and "deploy-4"
+Consumer 2: Gets "deploy-2"
+Consumer 3: Gets "deploy-3"
+```
+
+<Accordion title="Scaling Considerations">
+  **Benefits:**
+  - Higher throughput
+  - Better resource utilization
+  - Fault tolerance (if one consumer crashes, others continue)
+  
+  **Trade-offs:**
+  - More complex deployment
+  - Higher resource usage
+  - Potential Docker build contention
+  - S3 rate limits may apply
+  
+  **Optimal Setup:**
+  - Start with 1 consumer
+  - Monitor queue length and processing time
+  - Add consumers when queue consistently backs up
+  - Don't exceed CPU core count for CPU-bound builds
+</Accordion>
+
+## Monitoring Queue Health
+
+### Check Queue Length
+
+```bash
+redis-cli LLEN build-queue
+```
+
+**Interpretation:**
+- `0`: No pending deployments (healthy)
+- `1-5`: Normal operation
+- `10+`: Queue backing up, consider scaling
+- `100+`: System overloaded, investigate
+
+### View Queue Contents
+
+```bash
+# View all items (non-destructive)
+redis-cli LRANGE build-queue 0 -1
+```
+
+**Output:**
+```
+1) "xY9kL3mN2"
+2) "aB3xK9mP2q"
+3) "pQ7rS1tU4v"
+```
+
+### Monitor Processing Rate
+
+```bash
+# Watch queue length in real-time
+watch -n 1 'redis-cli LLEN build-queue'
+```
+
+## Queue vs. Direct Processing
+
+<Accordion title="Why Not Process Immediately?">
+  **Without Queue:**
+  ```typescript
+  app.post('/get/url', async (req, res) => {
+    await git.clone(...)
+    await uploadToS3(...)
+    await buildProject(...)  // ❌ Blocks response
+    res.json({ success: true })
+  })
+  ```
+  
+  **Problems:**
+  - User waits 30-60 seconds for response
+  - Multiple concurrent requests spawn multiple builds
+  - Server can run out of memory/CPU
+  - No way to prioritize or delay builds
+  
+  **With Queue:**
+  ```typescript
+  app.post('/get/url', async (req, res) => {
+    await git.clone(...)
+    await uploadToS3(...)
+    buildQueue(id)  // ✓ Immediate response
+    res.json({ success: true, id })
+  })
+  ```
+  
+  **Benefits:**
+  - User gets instant feedback
+  - Builds processed at controlled rate
+  - System resources protected
+  - Can monitor/retry failed builds
+</Accordion>
+
+## Key Implementation Files
+
+| File | Lines | Purpose |
+|------|-------|----------|
+| `upload-service/src/utils/buildQueue.ts` | 1-18 | Queue producer (LPUSH) |
+| `deploy-service/src/server.ts` | 1-29 | Queue consumer (BLPOP) |
+| `upload-service/src/server.ts` | 43 | Queue integration in upload flow |
+
+## Next Steps
+
+<CardGroup cols={2}>
+  <Card title="Deployment Process" icon="diagram-project" href="/features/deployment-process">
+    See how queue fits into overall deployment flow
+  </Card>
+  <Card title="Build System" icon="docker" href="/features/build-system">
+    Learn what happens after queue pop
+  </Card>
+</CardGroup>

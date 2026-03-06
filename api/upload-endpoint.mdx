@@ -1,0 +1,175 @@
+---
+title: 'Upload Endpoint'
+description: 'Deploy a repository by providing a Git URL'
+---
+
+## Endpoint
+
+```
+POST /get/url
+```
+
+Submit a Git repository URL for deployment. The service will clone the repository, upload files to storage, and queue the build process.
+
+## Request
+
+### Headers
+
+<ParamField header="Content-Type" type="string" required>
+  Must be `application/json`
+</ParamField>
+
+### Body Parameters
+
+<ParamField body="url" type="string" required>
+  The Git repository URL to clone and deploy. Supports HTTPS Git URLs.
+  
+  **Example:** `https://github.com/username/repository.git`
+</ParamField>
+
+## Response
+
+### Success Response
+
+<ResponseField name="success" type="boolean">
+  Always `true` when the deployment is successfully initiated
+</ResponseField>
+
+<ResponseField name="id" type="string">
+  A unique deployment identifier. Use this ID to reference your deployment.
+  
+  **Example:** `abc123def456`
+</ResponseField>
+
+### Error Response
+
+<ResponseField name="error" type="string">
+  Error message describing what went wrong
+</ResponseField>
+
+## Status Codes
+
+- **200** - Deployment successfully queued
+- **500** - Failed to clone repository (invalid URL, network issues, or private repository)
+
+## Examples
+
+<CodeGroup>
+
+```bash cURL
+curl -X POST http://localhost:3000/get/url \
+  -H "Content-Type: application/json" \
+  -d '{
+    "url": "https://github.com/username/my-website.git"
+  }'
+```
+
+```javascript JavaScript
+const response = await fetch('http://localhost:3000/get/url', {
+  method: 'POST',
+  headers: {
+    'Content-Type': 'application/json',
+  },
+  body: JSON.stringify({
+    url: 'https://github.com/username/my-website.git'
+  })
+});
+
+const data = await response.json();
+console.log(data.id); // abc123def456
+```
+
+```python Python
+import requests
+
+response = requests.post(
+    'http://localhost:3000/get/url',
+    json={'url': 'https://github.com/username/my-website.git'}
+)
+
+data = response.json()
+print(data['id'])  # abc123def456
+```
+
+```go Go
+package main
+
+import (
+    "bytes"
+    "encoding/json"
+    "fmt"
+    "net/http"
+)
+
+type DeployRequest struct {
+    URL string `json:"url"`
+}
+
+type DeployResponse struct {
+    Success bool   `json:"success"`
+    ID      string `json:"id"`
+}
+
+func main() {
+    reqBody := DeployRequest{
+        URL: "https://github.com/username/my-website.git",
+    }
+    
+    jsonData, _ := json.Marshal(reqBody)
+    
+    resp, err := http.Post(
+        "http://localhost:3000/get/url",
+        "application/json",
+        bytes.NewBuffer(jsonData),
+    )
+    if err != nil {
+        panic(err)
+    }
+    defer resp.Body.Close()
+    
+    var result DeployResponse
+    json.NewDecoder(resp.Body).Decode(&result)
+    fmt.Println(result.ID) // abc123def456
+}
+```
+
+</CodeGroup>
+
+## Response Examples
+
+### Successful Deployment
+
+```json
+{
+  "success": true,
+  "id": "abc123def456"
+}
+```
+
+### Error Response
+
+```json
+{
+  "error": "Failed to clone repository"
+}
+```
+
+## What Happens After Upload
+
+1. The repository is cloned to the server
+2. All files are uploaded to S3 storage with the deployment ID
+3. The deployment ID is added to a build queue
+4. A build worker processes the deployment asynchronously
+
+<Note>
+  The endpoint returns immediately after queueing the deployment. The actual build process happens asynchronously. See [Deployment Status](/api/deployment-status) for tracking your deployment.
+</Note>
+
+## Common Errors
+
+| Error | Cause | Solution |
+|-------|-------|----------|
+| Failed to clone repository | Invalid Git URL | Verify the repository URL is correct and accessible |
+| Failed to clone repository | Private repository | Ensure the repository is public or configure authentication |
+| Failed to clone repository | Network timeout | Check network connectivity and try again |
+| 400 Bad Request | Missing `url` field | Include `url` in the request body |

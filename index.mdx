@@ -1,97 +1,143 @@
 ---
-title: "Introduction"
-description: "Welcome to the new home for your documentation"
+title: "Deploy Frontend Apps with Ease"
+description: "A Vercel-like deployment platform powered by Bun, with automated builds, S3 hosting, and seamless CI/CD"
 ---
 
-## Setting up
+<div className="relative overflow-hidden rounded-lg" style={{background: 'linear-gradient(135deg, #bf3b41 0%, #090908 100%)', padding: '4rem 2rem'}}>
+  <div className="max-w-4xl mx-auto text-center">
+    <h1 className="text-5xl font-bold mb-6" style={{color: '#f7ecd7'}}>
+      Deploy Frontend Apps in Seconds
+    </h1>
+    <p className="text-xl mb-8" style={{color: '#e6e6e6'}}>
+      A Vercel-like deployment platform powered by Bun. Push your GitHub repo, and we'll build, optimize, and host your frontend application automatically.
+    </p>
+    <div className="flex gap-4 justify-center flex-wrap">
+      <a href="/quickstart" className="inline-flex items-center gap-2 px-6 py-3 rounded-md font-semibold" style={{background: '#f472b6', color: '#1f2937'}}>
+        Get Started
+        <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M13 7l5 5m0 0l-5 5m5-5H6" />
+        </svg>
+      </a>
+      <a href="https://github.com/Amaan-Khan14/Vercel-For-Frontend" className="inline-flex items-center gap-2 px-6 py-3 rounded-md font-semibold" style={{background: '#374151', color: '#d1d5db'}}>
+        View on GitHub
+        <svg className="w-4 h-4" fill="currentColor" viewBox="0 0 24 24">
+          <path fillRule="evenodd" d="M12 2C6.477 2 2 6.484 2 12.017c0 4.425 2.865 8.18 6.839 9.504.5.092.682-.217.682-.483 0-.237-.008-.868-.013-1.703-2.782.605-3.369-1.343-3.369-1.343-.454-1.158-1.11-1.466-1.11-1.466-.908-.62.069-.608.069-.608 1.003.07 1.531 1.032 1.531 1.032.892 1.53 2.341 1.088 2.91.832.092-.647.35-1.088.636-1.338-2.22-.253-4.555-1.113-4.555-4.951 0-1.093.39-1.988 1.029-2.688-.103-.253-.446-1.272.098-2.65 0 0 .84-.27 2.75 1.026A9.564 9.564 0 0112 6.844c.85.004 1.705.115 2.504.337 1.909-1.296 2.747-1.027 2.747-1.027.546 1.379.202 2.398.1 2.651.64.7 1.028 1.595 1.028 2.688 0 3.848-2.339 4.695-4.566 4.943.359.309.678.92.678 1.855 0 1.338-.012 2.419-.012 2.747 0 .268.18.58.688.482A10.019 10.019 0 0022 12.017C22 6.484 17.522 2 12 2z" clipRule="evenodd" />
+        </svg>
+      </a>
+    </div>
+  </div>
+</div>
 
-Get your documentation site up and running in minutes.
+## Why Choose Vercel For Frontend?
 
-<Card
-  title="Start here"
-  icon="rocket"
-  href="/quickstart"
-  horizontal
->
-  Follow our three step quickstart guide.
+<CardGroup cols={3}>
+  <Card title="Lightning Fast Builds" icon="bolt">
+    Powered by Bun's blazing-fast runtime and Docker containers for isolated, efficient builds
+  </Card>
+  <Card title="S3 Hosting" icon="server">
+    Deploy to AWS S3 with automatic CDN distribution for global performance
+  </Card>
+  <Card title="Queue Management" icon="list-check">
+    Redis-powered build queue ensures reliable, ordered deployments at scale
+  </Card>
+  <Card title="Git Integration" icon="code-branch">
+    Simply provide your GitHub repository URL and let the platform handle the rest
+  </Card>
+  <Card title="Framework Agnostic" icon="layer-group">
+    Works with React, Vue, Angular, Next.js, and any frontend framework that builds to static files
+  </Card>
+  <Card title="Automated Pipeline" icon="arrows-rotate">
+    Clone → Upload → Build → Deploy — fully automated CI/CD with zero configuration
+  </Card>
+</CardGroup>
+
+## How It Works
+
+<Steps>
+  <Step title="Submit Your Repository">
+    Send a POST request with your GitHub repository URL to the upload service
+  </Step>
+  <Step title="Clone and Upload">
+    The platform clones your repository and uploads all files to S3 storage
+  </Step>
+  <Step title="Queue the Build">
+    Your deployment is added to the Redis build queue for processing
+  </Step>
+  <Step title="Docker Build">
+    A Docker container builds your project, handling dependencies and bundling automatically
+  </Step>
+  <Step title="Deploy to S3">
+    The built assets are uploaded to S3 and made available via a unique deployment ID
+  </Step>
+</Steps>
+
+## Core Features
+
+<CardGroup cols={2}>
+  <Card title="Deployment Process" icon="rocket" href="/features/deployment-process">
+    Learn how the end-to-end deployment pipeline works
+  </Card>
+  <Card title="Build System" icon="hammer" href="/features/build-system">
+    Understand the Docker-based build architecture
+  </Card>
+  <Card title="Queue Management" icon="network-wired" href="/features/queue-management">
+    Explore how Redis manages concurrent deployments
+  </Card>
+  <Card title="API Reference" icon="code" href="/api/upload-endpoint">
+    Check out the REST API for submitting deployments
+  </Card>
+</CardGroup>
+
+## Quick Start
+
+Get your first deployment running in under 5 minutes.
+
+<CodeGroup>
+
+```bash cURL
+curl -X POST http://localhost:3000/get/url \
+  -H "Content-Type: application/json" \
+  -d '{"url": "https://github.com/your-username/your-frontend-repo"}'
+```
+
+```javascript JavaScript/Node.js
+const response = await fetch('http://localhost:3000/get/url', {
+  method: 'POST',
+  headers: { 'Content-Type': 'application/json' },
+  body: JSON.stringify({
+    url: 'https://github.com/your-username/your-frontend-repo'
+  })
+});
+
+const { id } = await response.json();
+console.log('Deployment ID:', id);
+```
+
+```python Python
+import requests
+
+response = requests.post(
+    'http://localhost:3000/get/url',
+    json={'url': 'https://github.com/your-username/your-frontend-repo'}
+)
+
+data = response.json()
+print(f"Deployment ID: {data['id']}")
+```
+
+</CodeGroup>
+
+<Card title="Full Setup Guide" icon="book-open" href="/quickstart" horizontal>
+  Follow the complete quickstart to configure AWS, Redis, Docker, and deploy your first app
 </Card>
 
-## Make it yours
+## Ready to Deploy?
 
-Design a docs site that looks great and empowers your users.
-
-<Columns cols={2}>
-  <Card
-    title="Edit locally"
-    icon="pen-to-square"
-    href="/development"
-  >
-    Edit your docs locally and preview them in real time.
+<CardGroup cols={2}>
+  <Card title="Configuration Guide" icon="gear" href="/configuration/environment-variables">
+    Set up AWS credentials, Redis connection, and environment variables
   </Card>
-  <Card
-    title="Customize your site"
-    icon="palette"
-    href="/essentials/settings"
-  >
-    Customize the design and colors of your site to match your brand.
+  <Card title="Deploy Your App" icon="upload" href="/guides/deploying-your-app">
+    Step-by-step guide to deploying your first frontend application
   </Card>
-    <Card
-    title="Set up navigation"
-    icon="map"
-    href="/essentials/navigation"
-  >
-    Organize your docs to help users find what they need and succeed with your product.
-  </Card>
-  <Card
-    title="API documentation"
-    icon="terminal"
-    href="/api-reference/introduction"
-  >
-    Auto-generate API documentation from OpenAPI specifications.
-  </Card>
-</Columns>
-
-## Create beautiful pages
-
-Everything you need to create world-class documentation.
-
-<Columns cols={2}>
-  <Card
-    title="Write with MDX"
-    icon="pen-fancy"
-    href="/essentials/markdown"
-  >
-    Use MDX to style your docs pages.
-  </Card>
-  <Card
-    title="Code samples"
-    icon="code"
-    href="/essentials/code"
-  >
-    Add sample code to demonstrate how to use your product.
-  </Card>
-  <Card
-    title="Images"
-    icon="image"
-    href="/essentials/images"
-  >
-    Display images and other media.
-  </Card>
-  <Card
-    title="Reusable snippets"
-    icon="recycle"
-    href="/essentials/reusable-snippets"
-  >
-    Write once and reuse across your docs.
-  </Card>
-</Columns>
-
-## Need inspiration?
-
-<Card
-  title="See complete examples"
-  icon="stars"
-  href="https://mintlify.com/customers"
->
-  Browse our showcase of exceptional documentation sites.
-</Card>
+</CardGroup>

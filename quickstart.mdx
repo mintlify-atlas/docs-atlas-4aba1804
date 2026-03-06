@@ -1,80 +1,417 @@
 ---
-title: "Quickstart"
-description: "Start building awesome documentation in minutes"
+title: Quick Start
+description: Deploy your first frontend application in 10 minutes
 ---
 
-## Get started in three steps
+## Overview
 
-Get your documentation site running locally and make your first customization.
+This guide will walk you through setting up the Vercel For Frontend platform locally and deploying your first application. By the end, you'll have both services running and a live deployment accessible via S3.
 
-### Step 1: Set up your local environment
+## Prerequisites
 
-<AccordionGroup>
-  <Accordion icon="copy" title="Clone your docs locally">
-    During the onboarding process, you created a GitHub repository with your docs content if you didn't already have one. You can find a link to this repository in your [dashboard](https://dashboard.mintlify.com).
-    
-    To clone the repository locally so that you can make and preview changes to your docs, follow the [Cloning a repository](https://docs.github.com/en/repositories/creating-and-managing-repositories/cloning-a-repository) guide in the GitHub docs.
-  </Accordion>
-  <Accordion icon="rectangle-terminal" title="Start the preview server">
-    1. Install the Mintlify CLI: `npm i -g mint`
-    2. Navigate to your docs directory and run: `mint dev`
-    3. Open `http://localhost:3000` to see your docs live!
-    
-    <Tip>Your preview updates automatically as you edit files.</Tip>
-  </Accordion>
-</AccordionGroup>
-
-### Step 2: Deploy your changes
-
-<AccordionGroup>
-  <Accordion icon="github" title="Install our GitHub app">
-    Install the Mintlify GitHub app from your [dashboard](https://dashboard.mintlify.com/settings/organization/github-app).
-    
-    Our GitHub app automatically deploys your changes to your docs site, so you don't need to manage deployments yourself.
-</Accordion>
-<Accordion icon="palette" title="Update your site name and colors">
-    For a first change, let's update the name and colors of your docs site.
-
-    1. Open `docs.json` in your editor.
-    2. Change the `"name"` field to your project name.
-    3. Update the `"colors"` to match your brand.
-    4. Save and see your changes instantly at `http://localhost:3000`.
-
-    <Tip>Try changing the primary color to see an immediate difference!</Tip>
-  </Accordion>
-</AccordionGroup>
-
-### Step 3: Go live
-
-<Accordion icon="rocket" title="Publish your docs">
-  1. Commit and push your changes.
-  2. Your docs will update and be live in moments!
-</Accordion>
-
-## Next steps
-
-Now that you have your docs running, explore these key features:
+Before you begin, ensure you have the following installed and configured:
 
 <CardGroup cols={2}>
-
-<Card title="Write Content" icon="pen-to-square" href="/essentials/markdown">
-  Learn MDX syntax and start writing your documentation.
-</Card>
-
-<Card title="Customize style" icon="palette" href="/essentials/settings">
-  Make your docs match your brand perfectly.
-</Card>
-
-<Card title="Add code examples" icon="square-code" href="/essentials/code">
-  Include syntax-highlighted code blocks.
-</Card>
-
-<Card title="API documentation" icon="code" href="/api-reference/introduction">
-  Auto-generate API docs from OpenAPI specs.
-</Card>
-
+  <Card title="Bun Runtime" icon="b">
+    Install from [bun.sh](https://bun.sh) - Required for running both services
+  </Card>
+  <Card title="Docker" icon="docker">
+    Install Docker Desktop or Docker Engine - Required for building projects
+  </Card>
+  <Card title="Redis" icon="database">
+    Install Redis locally or use a cloud instance - Required for queue management
+  </Card>
+  <Card title="AWS Account" icon="aws">
+    Active AWS account with S3 access - Required for storage and hosting
+  </Card>
 </CardGroup>
 
 <Note>
-  **Need help?** See our [full documentation](https://mintlify.com/docs) or join our [community](https://mintlify.com/community).
+This platform was built using Bun v1.1.26. While newer versions should work, this is the tested version.
 </Note>
+
+## Installation
+
+<Steps>
+  <Step title="Clone the Repository">
+    First, clone the platform repository to your local machine:
+
+    ```bash
+    git clone <your-repository-url>
+    cd vercel-for-frontend
+    ```
+  </Step>
+
+  <Step title="Install Dependencies">
+    Install dependencies for all services. The platform consists of two separate services that need to be installed independently:
+
+    <CodeGroup>
+    ```bash Upload Service
+    cd upload-service
+    bun install
+    ```
+
+    ```bash Deploy Service
+    cd deploy-service
+    bun install
+    ```
+    </CodeGroup>
+
+    Both services use the same core dependencies:
+    - `express` - HTTP server
+    - `aws-sdk` - S3 operations
+    - `redis` - Queue management
+    - `simple-git` - Git operations (upload-service only)
+    - `ignore` - Gitignore parsing (upload-service only)
+
+  </Step>
+
+  <Step title="Create S3 Bucket">
+    Create an S3 bucket named `vercel-frontend` in your AWS account:
+
+    ```bash
+    aws s3 mb s3://vercel-frontend --region us-east-1
+    ```
+
+    Enable static website hosting on the bucket:
+
+    ```bash
+    aws s3 website s3://vercel-frontend --index-document index.html
+    ```
+
+    <Warning>
+    The bucket name `vercel-frontend` is hardcoded in the source:
+    - upload-service/src/utils/uploadFiles.ts:20
+    - deploy-service/src/utils/donwloadS3Folde.ts:16
+    
+    If you want to use a different bucket name, you'll need to update these files.
+    </Warning>
+  </Step>
+
+  <Step title="Configure AWS Credentials">
+    Both services require AWS credentials to access S3. Create IAM credentials with S3 full access and configure them.
+
+    **Required IAM Permissions:**
+    - `s3:PutObject` - Upload files
+    - `s3:GetObject` - Download files
+    - `s3:ListBucket` - List bucket contents
+
+    **Get your AWS credentials:**
+    1. Go to AWS IAM Console
+    2. Create a new user or use existing
+    3. Attach `AmazonS3FullAccess` policy (or create a custom policy with the permissions above)
+    4. Generate access keys
+
+  </Step>
+
+  <Step title="Set Environment Variables">
+    Configure environment variables for both services. The AWS credentials are read from environment variables as seen in the source code:
+
+    ```typescript
+    // Both services use these environment variables
+    // upload-service/src/utils/uploadFiles.ts:4-7
+    export const s3 = new S3({
+        accessKeyId: process.env.AWS_ACCESS_KEY_ID,
+        secretAccessKey: process.env.AWS_SECRET_ACCESS_KEY,
+        region: process.env.AWS_REGION
+    })
+    ```
+
+    **For Upload Service:**
+    ```bash
+    export AWS_ACCESS_KEY_ID="your-access-key-id"
+    export AWS_SECRET_ACCESS_KEY="your-secret-access-key"
+    export AWS_REGION="us-east-1"
+    ```
+
+    **For Deploy Service:**
+    ```bash
+    export AWS_ACCESS_KEY_ID="your-access-key-id"
+    export AWS_SECRET_ACCESS_KEY="your-secret-access-key"
+    export AWS_REGION="us-east-1"
+    ```
+
+    <Note>
+    You can also create `.env` files in each service directory, but you'll need to load them manually as the services don't include dotenv by default.
+    </Note>
+  </Step>
+
+  <Step title="Start Redis">
+    Ensure Redis is running on the default port (6379). The services connect to Redis without authentication by default:
+
+    ```bash
+    redis-server
+    ```
+
+    Verify Redis is running:
+    ```bash
+    redis-cli ping
+    # Should return: PONG
+    ```
+
+    The deploy service connects to Redis and listens for jobs on the `build-queue`:
+    ```typescript
+    // deploy-service/src/server.ts:5
+    const client = await createClient()
+        .on('error', err => console.log('Redis Client Error', err))
+        .on('connect', () => console.log('Redis Client Connected'))
+        .connect();
+    ```
+  </Step>
+</Steps>
+
+## Running the Services
+
+Both services need to run simultaneously for the platform to function:
+
+<CodeGroup>
+```bash Upload Service (Terminal 1)
+cd upload-service
+bun run src/server.ts
+```
+
+```bash Deploy Service (Terminal 2)
+cd deploy-service
+bun run src/server.ts
+```
+</CodeGroup>
+
+**Expected output:**
+
+```bash Upload Service
+Server is running on port 3000
+```
+
+```bash Deploy Service
+Redis Client Connected
+```
+
+<Note>
+The upload service runs on port 3000 by default (upload-service/src/server.ts:52). The deploy service doesn't expose an HTTP port as it only processes queue jobs.
+</Note>
+
+## Deploy Your First Application
+
+Now that both services are running, let's deploy a frontend application:
+
+<Steps>
+  <Step title="Prepare a Repository">
+    You'll need a GitHub repository with a frontend project. The project must have:
+    - A `package.json` file
+    - A build script defined (`npm run build`)
+    - Build output to either `/build` or `/dist` directory
+
+    Example frameworks that work:
+    - Create React App (outputs to `/build`)
+    - Vite (outputs to `/dist`)
+    - Next.js static export
+    - Vue CLI
+  </Step>
+
+  <Step title="Submit Deployment Request">
+    Send a POST request to the upload service with your repository URL:
+
+    ```bash
+    curl -X POST http://localhost:3000/get/url \
+      -H "Content-Type: application/json" \
+      -d '{
+        "url": "https://github.com/username/your-frontend-repo.git"
+      }'
+    ```
+
+    **Expected response:**
+    ```json
+    {
+      "success": true,
+      "id": "aB3xY9kL2m"
+    }
+    ```
+
+    The `id` field is your deployment identifier. Save this for accessing your deployed application.
+  </Step>
+
+  <Step title="Monitor the Build">
+    Watch the terminal outputs to monitor your deployment:
+
+    **Upload Service logs:**
+    ```
+    reached1
+    File uploaded successfully
+    ```
+
+    **Deploy Service logs:**
+    ```bash
+    Response { key: 'build-queue', element: 'aB3xY9kL2m' }
+    stdout: Successfully tagged frontend-build-ab3xy9kl2m:latest
+    stdout: Successfully copied to /app/build
+    Project uploaded successfully
+    ```
+
+    The build process creates a Docker container, installs dependencies, runs the build, and uploads the output to S3.
+  </Step>
+
+  <Step title="Access Your Deployment">
+    Once the build completes, your application is available at:
+
+    ```
+    http://vercel-frontend.s3-website-us-east-1.amazonaws.com/dist/{your-id}/index.html
+    ```
+
+    Replace `{your-id}` with the deployment ID from step 2.
+
+    <Note>
+    The exact URL format depends on your S3 bucket region and configuration. Check your S3 bucket's static website hosting settings for the base URL.
+    </Note>
+  </Step>
+</Steps>
+
+## Understanding the Deployment Flow
+
+Here's what happens behind the scenes when you deploy:
+
+<Steps>
+  <Step title="Repository Cloning">
+    The upload service clones your repository to a local directory:
+
+    ```typescript
+    // upload-service/src/server.ts:26
+    await git.clone(repoUrl, clonePath)
+    const files = getAllFiles(clonePath)
+    ```
+
+    The `getAllFiles` function respects your `.gitignore` file, ensuring `node_modules` and other ignored files aren't uploaded:
+
+    ```typescript
+    // upload-service/src/utils/getAllFiles.ts:7
+    const gitignorePath = path.join(folderPath, '.gitignore');
+    let ig = ignore();
+    if (fs.existsSync(gitignorePath)) {
+        const gitignoreContent = fs.readFileSync(gitignorePath, 'utf8');
+        ig = ig.add(gitignoreContent);
+    }
+    ```
+  </Step>
+
+  <Step title="S3 Upload">
+    All source files are uploaded to S3 under the `output/{id}` prefix:
+
+    ```typescript
+    // upload-service/src/server.ts:32
+    const uploadPromises = files.map(async (localFilePath) => {
+        const relativePath = path.relative(clonePath, localFilePath)
+        const s3Key = path.posix.join('output', randomId, relativePath)
+        return uploadFiles(s3Key, localFilePath)
+    });
+    await Promise.all(uploadPromises);
+    ```
+  </Step>
+
+  <Step title="Build Queue">
+    The deployment ID is pushed to Redis for the deploy service to process:
+
+    ```typescript
+    // upload-service/src/utils/buildQueue.ts:9
+    export const buildQueue = async (id: string) => {
+        await client.LPUSH('build-queue', id)
+    }
+    ```
+  </Step>
+
+  <Step title="Docker Build">
+    The deploy service creates a Dockerfile and builds your project in an isolated container:
+
+    ```typescript
+    // deploy-service/src/utils/buildProject.ts:12
+    fs.writeFileSync(dockerFilePath, `
+    FROM node:20-alpine AS builder
+    WORKDIR /app
+    COPY package*.json ./
+    RUN npm install
+    COPY . .
+    RUN npm run build
+    `)
+    ```
+
+    The build command handles both common output directories:
+    ```bash
+    docker cp build-container-{id}:/app/build {projectPath}/build || 
+    docker cp build-container-{id}:/app/dist {projectPath}/build
+    ```
+  </Step>
+
+  <Step title="Production Upload">
+    Built files are uploaded to S3 under the `dist/{id}` prefix:
+
+    ```typescript
+    // deploy-service/src/utils/buildProject.ts:73
+    export function copyFinalDist(id: string) {
+        const projectPath = path.join(process.cwd(), 'dist', `output/${id}/build`);
+        const allFiles = getAllFiles(projectPath);
+        allFiles.forEach(fullFilePath => {
+            uploadFiles(`dist/${id}/` + fullFilePath.slice(projectPath.length + 1), fullFilePath);
+        })
+    }
+    ```
+  </Step>
+</Steps>
+
+## Troubleshooting
+
+### Upload Service Issues
+
+**Error: "Failed to clone repository"**
+- Verify the repository URL is correct and accessible
+- Ensure the repository is public or you have access
+- Check your network connection
+
+**Error: "Upload error" in logs**
+- Verify AWS credentials are set correctly
+- Check S3 bucket exists and is accessible
+- Verify IAM permissions include `s3:PutObject`
+
+### Deploy Service Issues
+
+**Error: "Redis Client Error"**
+- Ensure Redis is running on port 6379
+- Check Redis is accepting connections: `redis-cli ping`
+
+**Error: Docker build failures**
+- Verify Docker daemon is running
+- Ensure your project has a valid `package.json`
+- Check that `npm run build` works in your repository
+- Verify the build script outputs to `/build` or `/dist`
+
+**Error: "Error downloading file from S3"**
+- Check AWS credentials are set for deploy service
+- Verify S3 bucket permissions
+- Ensure the upload service completed successfully
+
+## Production Considerations
+
+<Warning>
+This quickstart uses local development settings. For production deployments, consider:
+
+- **Security**: Don't expose Redis without authentication
+- **Scaling**: Run multiple deploy service instances for parallel builds
+- **Monitoring**: Add logging and monitoring for build failures
+- **Cleanup**: Implement a cleanup strategy for old deployments in S3
+- **Error Handling**: Add retry logic and better error messages
+- **Build Timeout**: Set maximum build times to prevent hanging containers
+</Warning>
+
+## Next Steps
+
+<CardGroup cols={2}>
+  <Card title="API Reference" icon="code" href="/api/upload-endpoint">
+    Explore all API endpoints and parameters
+  </Card>
+  <Card title="Build System" icon="sitemap" href="/features/build-system">
+    Learn about the Docker build system
+  </Card>
+  <Card title="Configuration" icon="gear" href="/configuration/environment-variables">
+    Customize bucket names, ports, and more
+  </Card>
+  <Card title="Deployment Guide" icon="rocket" href="/guides/deploying-your-app">
+    Deploy your frontend applications
+  </Card>
+</CardGroup>

@@ -1,0 +1,226 @@
+---
+title: 'Deploying Your App'
+description: 'Complete walkthrough for deploying your frontend application'
+icon: 'rocket'
+---
+
+This guide walks you through the complete process of deploying your frontend application, from preparing your repository to accessing your live site.
+
+## Prerequisites
+
+Before deploying, ensure:
+
+- Your frontend project is in a Git repository (GitHub, GitLab, Bitbucket, etc.)
+- Your repository is publicly accessible or you have proper access credentials
+- Your project has a `package.json` with a `build` script
+- The build outputs to either `build/` or `dist/` directory
+
+<Tip>
+The platform supports any frontend framework that follows standard Node.js build patterns (React, Vue, Angular, Svelte, etc.)
+</Tip>
+
+## Deployment Process
+
+The deployment happens in several automated stages:
+
+<Steps>
+  <Step title="Submit Repository URL">
+    Send your repository URL to the deployment API endpoint.
+
+    ```bash
+    curl -X POST http://your-platform-url:3000/get/url \
+      -H "Content-Type: application/json" \
+      -d '{"url": "https://github.com/username/your-repo.git"}'
+    ```
+
+    **Response:**
+    ```json
+    {
+      "success": true,
+      "id": "abc123xyz"
+    }
+    ```
+
+    Save the `id` from the response - this is your unique deployment identifier.
+  </Step>
+
+  <Step title="Repository Clone & Upload">
+    The platform automatically:
+    
+    1. Clones your repository to a temporary directory
+    2. Scans all files in your project
+    3. Uploads files to S3 storage with your deployment ID
+    4. Adds your deployment to the build queue
+
+    This step typically completes in 10-30 seconds depending on repository size.
+  </Step>
+
+  <Step title="Build Process">
+    Once in the queue, the deploy service:
+
+    1. Downloads your project files from S3
+    2. Creates a Docker container with Node.js 20
+    3. Installs dependencies with `npm install`
+    4. Runs `npm run build`
+    5. Extracts the built files from the container
+    6. Uploads the production build to S3
+
+    <Warning>
+    The build process expects your `package.json` to include a `build` script and output to either `build/` or `dist/` directory.
+    </Warning>
+  </Step>
+
+  <Step title="Access Your Deployed Site">
+    After successful deployment, your site is available at:
+
+    ```
+    http://your-cdn-url/dist/{deployment-id}/index.html
+    ```
+
+    Replace `{deployment-id}` with the ID you received in step 1.
+  </Step>
+</Steps>
+
+## Complete Example
+
+Here's a full example deploying a React application:
+
+```bash
+# Submit deployment request
+RESPONSE=$(curl -X POST http://platform.example.com:3000/get/url \
+  -H "Content-Type: application/json" \
+  -d '{"url": "https://github.com/myuser/react-app.git"}')
+
+# Extract deployment ID
+DEPLOY_ID=$(echo $RESPONSE | jq -r '.id')
+echo "Deployment ID: $DEPLOY_ID"
+
+# Wait for build to complete (check logs or implement polling)
+sleep 120
+
+# Access your deployed site
+echo "Site URL: http://your-cdn-url/dist/$DEPLOY_ID/index.html"
+```
+
+## Updating Your Deployment
+
+To deploy updates:
+
+1. Push changes to your Git repository
+2. Submit a new deployment request with the same repository URL
+3. You'll receive a new deployment ID
+4. The new version will be available at the new URL
+
+<Note>
+Each deployment creates a new immutable version with a unique ID. This ensures you can roll back to previous versions if needed.
+</Note>
+
+## Repository Requirements
+
+### package.json Example
+
+Your `package.json` must include a build script:
+
+```json
+{
+  "name": "my-frontend-app",
+  "version": "1.0.0",
+  "scripts": {
+    "build": "react-scripts build"
+  },
+  "dependencies": {
+    "react": "^18.0.0",
+    "react-dom": "^18.0.0"
+  }
+}
+```
+
+### Build Output Directory
+
+The platform checks for built files in these locations (in order):
+
+1. `/app/build` - Used by Create React App, Gatsby
+2. `/app/dist` - Used by Vite, Vue CLI, many bundlers
+
+<Tip>
+If your framework outputs to a different directory, update your build script to copy files to `build/` or `dist/`.
+</Tip>
+
+## Monitoring Deployment Status
+
+While the platform doesn't provide a status API endpoint yet, you can monitor deployment progress through:
+
+### Server Logs
+
+If you have access to the platform logs, look for:
+
+```
+# Upload service logs
+Clone error: <any error messages>
+reached1
+File uploaded successfully
+
+# Deploy service logs
+Response { key: 'build-queue', element: 'your-deployment-id' }
+stdout: Docker build output...
+Project uploaded successfully
+```
+
+### Redis Queue
+
+Check the build queue status:
+
+```bash
+redis-cli LLEN build-queue
+```
+
+A value of `0` means the queue is empty and your build should be processed or complete.
+
+## Deployment Timeline
+
+Typical deployment times:
+
+| Stage | Duration |
+|-------|----------|
+| API Response | < 1 second |
+| Repository Clone | 5-30 seconds |
+| S3 Upload | 10-60 seconds |
+| Queue Wait | 0-300 seconds |
+| Docker Build | 60-300 seconds |
+| Final Upload | 10-60 seconds |
+| **Total** | **2-12 minutes** |
+
+<Note>
+Queue wait time depends on how many deployments are ahead of yours. Builds are processed sequentially.
+</Note>
+
+## Best Practices
+
+### Optimize Build Times
+
+- Use `.dockerignore` to exclude unnecessary files
+- Keep dependencies minimal
+- Use build caching where possible
+
+### Repository Organization
+
+- Keep your root `package.json` with build scripts
+- Ensure all dependencies are in `package.json`, not just `devDependencies`
+- Test your build locally with `npm run build` before deploying
+
+### Version Control
+
+- Tag releases in Git for easy reference
+- Keep track of deployment IDs for each version
+- Document which deployment ID is currently in production
+
+## Next Steps
+
+<CardGroup cols={2}>
+  <Card title="Troubleshooting" icon="wrench" href="/guides/troubleshooting">
+    Learn how to diagnose and fix common deployment issues
+  </Card>
+  <Card title="API Reference" icon="code" href="/api/upload-endpoint">
+    Explore all available API endpoints
+  </Card>
+</CardGroup>

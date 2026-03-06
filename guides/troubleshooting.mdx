@@ -1,0 +1,544 @@
+---
+title: 'Troubleshooting'
+description: 'Common deployment issues and solutions'
+icon: 'wrench'
+---
+
+This guide helps you diagnose and resolve common issues when deploying your frontend applications.
+
+## Quick Diagnostics
+
+Before diving into specific issues, run these quick checks:
+
+<Steps>
+  <Step title="Verify API Response">
+    Ensure you received a successful response from the deployment API:
+    
+    ```json
+    {"success": true, "id": "your-deployment-id"}
+    ```
+    
+    If not, see [API Request Failures](#api-request-failures).
+  </Step>
+  
+  <Step title="Check Build Queue">
+    Verify your deployment is in or has been processed from the queue:
+    
+    ```bash
+    redis-cli LLEN build-queue
+    ```
+  </Step>
+  
+  <Step title="Review Server Logs">
+    Check both upload-service and deploy-service logs for errors.
+  </Step>
+</Steps>
+
+## Common Issues
+
+### API Request Failures
+
+<Accordion title="Error: 'Failed to clone repository'">
+  **Error Message:**
+  ```json
+  {
+    "error": "Failed to clone repository"
+  }
+  ```
+
+  **Cause:** The platform couldn't clone your Git repository.
+
+  **Solutions:**
+
+  1. **Verify Repository URL**
+     ```bash
+     # Test cloning locally
+     git clone https://github.com/username/repo.git
+     ```
+
+  2. **Check Repository Access**
+     - Ensure the repository is public, or
+     - Use HTTPS with embedded credentials: `https://token@github.com/user/repo.git`
+     - Check if the repository URL is correct and active
+
+  3. **Network Issues**
+     - Verify the platform server has internet access
+     - Check for firewall rules blocking Git operations
+     - Ensure DNS resolution works for Git host
+
+  4. **Server Logs:** Check upload service logs for detailed error:
+     ```bash
+     # Look for "Clone error:" messages
+     docker logs upload-service 2>&1 | grep "Clone error"
+     ```
+</Accordion>
+
+<Accordion title="No Response from API">
+  **Symptom:** The API request hangs or times out.
+
+  **Solutions:**
+
+  1. **Check Server Status**
+     ```bash
+     curl http://your-platform:3000/
+     ```
+
+  2. **Verify Port 3000 is Accessible**
+     ```bash
+     telnet your-platform 3000
+     ```
+
+  3. **Check Upload Service Logs**
+     ```bash
+     docker ps | grep upload-service
+     docker logs upload-service
+     ```
+
+  4. **Restart Upload Service**
+     ```bash
+     docker restart upload-service
+     ```
+</Accordion>
+
+<Accordion title="Invalid Request Body">
+  **Cause:** Missing or malformed `url` field in request body.
+
+  **Solution:** Ensure your request includes the `url` field:
+  
+  ```bash
+  curl -X POST http://platform:3000/get/url \
+    -H "Content-Type: application/json" \
+    -d '{"url": "https://github.com/user/repo.git"}'
+  ```
+  
+  <Warning>
+  The field must be named `url`, not `repoUrl` or `repository`.
+  </Warning>
+</Accordion>
+
+### Build Process Failures
+
+<Accordion title="Build Failures: npm install Errors">
+  **Symptom:** Build fails during dependency installation.
+
+  **Common Causes:**
+
+  1. **Missing package.json**
+     - Ensure `package.json` is in the repository root
+     - Check that it wasn't ignored by `.gitignore`
+
+  2. **Invalid package.json**
+     ```bash
+     # Validate locally
+     npm install
+     ```
+
+  3. **Network Issues in Container**
+     - Check Docker container has internet access
+     - Verify npm registry is accessible
+
+  4. **Platform-Specific Dependencies**
+     - The build uses `node:20-alpine` base image
+     - Some native modules may need additional build tools
+
+  **Debug Command:**
+  ```bash
+  # Test build in same environment
+  docker run -it --rm -v $(pwd):/app -w /app node:20-alpine sh
+  npm install
+  npm run build
+  ```
+</Accordion>
+
+<Accordion title="Build Failures: npm run build Errors">
+  **Symptom:** Installation succeeds but build script fails.
+
+  **Solutions:**
+
+  1. **Missing Build Script**
+     
+     Verify `package.json` includes:
+     ```json
+     {
+       "scripts": {
+         "build": "your-build-command"
+       }
+     }
+     ```
+
+  2. **Wrong Output Directory**
+     
+     The platform expects output in `/app/build` or `/app/dist`.
+     
+     If your framework uses a different directory, modify your build script:
+     ```json
+     {
+       "scripts": {
+         "build": "webpack --output-path=./build"
+       }
+     }
+     ```
+
+  3. **TypeScript Errors**
+     ```json
+     {
+       "scripts": {
+         "build": "tsc --noEmit false"
+       }
+     }
+     ```
+
+  4. **Memory Issues**
+     
+     Large projects may run out of memory:
+     ```json
+     {
+       "scripts": {
+         "build": "NODE_OPTIONS=--max-old-space-size=4096 react-scripts build"
+       }
+     }
+     ```
+</Accordion>
+
+<Accordion title="Build Output Not Found">
+  **Error in Logs:**
+  ```bash
+  docker cp build-container-{id}:/app/build failed
+  docker cp build-container-{id}:/app/dist failed
+  ```
+
+  **Cause:** Build doesn't output to `build/` or `dist/` directory.
+
+  **Solution:** Configure your build to output to one of these directories.
+
+  **Framework Examples:**
+
+  - **Vite (default: dist/)** - No change needed
+  - **Create React App (default: build/)** - No change needed  
+  - **Next.js**:
+    ```json
+    {
+      "scripts": {
+        "build": "next build && next export -o build"
+      }
+    }
+    ```
+  - **Angular**:
+    ```json
+    {
+      "scripts": {
+        "build": "ng build --output-path=dist"
+      }
+    }
+    ```
+</Accordion>
+
+### Docker Issues
+
+<Accordion title="Docker Build Failures">
+  **Symptom:** Build command execution fails with Docker errors.
+
+  **Solutions:**
+
+  1. **Docker Service Not Running**
+     ```bash
+     sudo systemctl status docker
+     sudo systemctl start docker
+     ```
+
+  2. **Insufficient Disk Space**
+     ```bash
+     df -h
+     docker system prune -a
+     ```
+
+  3. **Docker Permission Issues**
+     ```bash
+     sudo usermod -aG docker $USER
+     newgrp docker
+     ```
+
+  4. **Cleanup Orphaned Containers**
+     ```bash
+     # Remove old build containers
+     docker ps -a | grep build-container- | awk '{print $1}' | xargs docker rm
+     
+     # Remove old build images
+     docker images | grep frontend-build- | awk '{print $3}' | xargs docker rmi
+     ```
+</Accordion>
+
+<Accordion title="Container Build Timeout">
+  **Symptom:** Build takes too long and times out.
+
+  **Solutions:**
+
+  1. **Reduce Dependencies**
+     - Remove unused packages from `package.json`
+     - Use lightweight alternatives
+
+  2. **Optimize Docker Build**
+     - The platform creates a fresh Dockerfile for each build
+     - Consider caching strategies
+
+  3. **Check System Resources**
+     ```bash
+     # Monitor during build
+     docker stats
+     top
+     ```
+</Accordion>
+
+### S3 Upload Issues
+
+<Accordion title="Upload Errors">
+  **Error in Logs:**
+  ```
+  Upload error: ...
+  ```
+
+  **Cause:** Failed to upload files to S3 storage.
+
+  **Solutions:**
+
+  1. **Check AWS Credentials**
+     ```bash
+     # Verify environment variables
+     echo $AWS_ACCESS_KEY_ID
+     echo $AWS_SECRET_ACCESS_KEY
+     echo $AWS_REGION
+     ```
+
+  2. **Test S3 Access**
+     ```bash
+     aws s3 ls s3://vercel-frontend/
+     ```
+
+  3. **Verify Bucket Permissions**
+     - Ensure the IAM user has `s3:PutObject` permission
+     - Check bucket policy allows uploads
+
+  4. **Check Network Connectivity**
+     ```bash
+     curl -I https://s3.amazonaws.com
+     ```
+</Accordion>
+
+<Accordion title="Download Errors (Deploy Service)">
+  **Error in Logs:**
+  ```
+  Error downloading file from S3
+  ```
+
+  **Cause:** Deploy service can't download files uploaded by upload service.
+
+  **Solutions:**
+
+  1. **Verify Files Were Uploaded**
+     ```bash
+     aws s3 ls s3://vercel-frontend/output/{deployment-id}/
+     ```
+
+  2. **Check Deploy Service Credentials**
+     - Ensure deploy service has `s3:GetObject` and `s3:ListBucket` permissions
+
+  3. **Disk Space on Deploy Server**
+     ```bash
+     df -h
+     ```
+</Accordion>
+
+### Queue Problems
+
+<Accordion title="Build Never Starts">
+  **Symptom:** Deployment ID received but build never processes.
+
+  **Solutions:**
+
+  1. **Check Redis Connection**
+     ```bash
+     redis-cli ping
+     # Should return: PONG
+     ```
+
+  2. **Verify Build Queue**
+     ```bash
+     # Check if your ID is in queue
+     redis-cli LRANGE build-queue 0 -1
+     ```
+
+  3. **Check Deploy Service Status**
+     ```bash
+     docker ps | grep deploy-service
+     docker logs deploy-service
+     ```
+
+  4. **Restart Deploy Service**
+     ```bash
+     docker restart deploy-service
+     ```
+</Accordion>
+
+<Accordion title="Redis Connection Errors">
+  **Error in Logs:**
+  ```
+  Redis Client Error
+  Redis error: ...
+  ```
+
+  **Solutions:**
+
+  1. **Check Redis Service**
+     ```bash
+     docker ps | grep redis
+     systemctl status redis
+     ```
+
+  2. **Restart Redis**
+     ```bash
+     docker restart redis
+     # or
+     sudo systemctl restart redis
+     ```
+
+  3. **Verify Redis Configuration**
+     - Default connection expects Redis on `localhost:6379`
+     - Check firewall rules
+</Accordion>
+
+## Debugging Tips
+
+### Enable Verbose Logging
+
+Set log levels for more detailed output:
+
+```bash
+# In your environment
+export DEBUG=*
+export LOG_LEVEL=debug
+```
+
+### Manual Build Testing
+
+Test the build process locally:
+
+```bash
+# Clone repository
+git clone <your-repo-url> test-deploy
+cd test-deploy
+
+# Create the same Dockerfile
+cat > Dockerfile << 'EOF'
+FROM node:20-alpine AS builder
+WORKDIR /app
+COPY package*.json ./
+RUN npm install
+COPY . .
+RUN npm run build
+EOF
+
+# Build and extract
+docker build -t test-build .
+docker create --name test-container test-build
+docker cp test-container:/app/build ./build || \
+  docker cp test-container:/app/dist ./build
+docker rm test-container
+
+# Verify output
+ls -la build/
+```
+
+### Check End-to-End Flow
+
+Trace your deployment through each service:
+
+```bash
+# 1. Upload Service
+curl -X POST http://platform:3000/get/url \
+  -H "Content-Type: application/json" \
+  -d '{"url": "<repo-url>"}'
+# Note the ID
+
+# 2. Check S3 Upload
+aws s3 ls s3://vercel-frontend/output/<deployment-id>/
+
+# 3. Check Queue
+redis-cli LRANGE build-queue 0 -1
+
+# 4. Monitor Deploy Service
+docker logs -f deploy-service
+
+# 5. Check Final Output
+aws s3 ls s3://vercel-frontend/dist/<deployment-id>/
+
+# 6. Access Site
+curl http://your-cdn/dist/<deployment-id>/index.html
+```
+
+### Common Log Patterns
+
+**Successful Deployment:**
+```
+# Upload Service
+Clone complete
+reached1
+File uploaded successfully (repeated for each file)
+
+# Deploy Service  
+Response { key: 'build-queue', element: '<id>' }
+stdout: Successfully built <docker-image-id>
+stdout: Successfully tagged frontend-build-<id>
+File uploaded successfully (repeated for each built file)
+Project uploaded successfully
+```
+
+**Failed Deployment:**
+```
+# Look for these indicators
+Clone error: ...
+Execution error: ...
+stderr: ... (build errors)
+Upload error: ...
+Error downloading file from S3: ...
+Redis error: ...
+```
+
+## Getting Help
+
+<Card title="Still Stuck?" icon="life-ring">
+  If you've tried these solutions and still have issues:
+  
+  1. Collect deployment ID and timestamps
+  2. Gather relevant log snippets
+  3. Document steps to reproduce
+  4. Contact platform support with details
+</Card>
+
+## Prevention Best Practices
+
+<Tip>
+**Test Before Deploying**
+
+- Run `npm install && npm run build` locally
+- Test in a Docker container with `node:20-alpine`
+- Verify build outputs to correct directory
+- Check repository is accessible
+</Tip>
+
+<Tip>
+**Monitor Your Deployments**
+
+- Keep deployment IDs organized
+- Set up log monitoring
+- Track build times to detect anomalies
+- Monitor S3 storage usage
+</Tip>
+
+<Tip>
+**Maintain Your Repository**
+
+- Keep dependencies updated
+- Remove unused packages
+- Document build requirements
+- Test build process in CI/CD
+</Tip>

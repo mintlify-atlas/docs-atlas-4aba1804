@@ -1,0 +1,608 @@
+---
+title: Redis Setup
+description: Install and configure Redis for build queue management
+---
+
+Vercel For Frontend uses Redis to manage the build queue between the upload service and deploy service. The upload service pushes project IDs to the queue, and the deploy service pulls them for processing.
+
+## How Redis is Used
+
+The platform uses Redis for asynchronous job processing:
+
+1. **Upload Service** (`upload-service/src/utils/buildQueue.ts:11`): Pushes project IDs to the `build-queue` using `LPUSH`
+2. **Deploy Service** (`deploy-service/src/server.ts:13`): Blocks and waits for new items using `BLPOP`
+
+<Info>
+  Redis acts as a reliable message broker, ensuring builds are processed in order and no projects are lost during high load.
+</Info>
+
+## Installation
+
+<Tabs>
+  <Tab title="macOS">
+    <Steps>
+      <Step title="Install via Homebrew">
+        ```bash
+        brew install redis
+        ```
+      </Step>
+
+      <Step title="Start Redis Server">
+        ```bash
+        brew services start redis
+        ```
+
+        Or run Redis in the foreground:
+
+        ```bash
+        redis-server
+        ```
+      </Step>
+
+      <Step title="Verify Installation">
+        ```bash
+        redis-cli ping
+        ```
+
+        Expected output: `PONG`
+      </Step>
+    </Steps>
+  </Tab>
+
+  <Tab title="Linux (Ubuntu/Debian)">
+    <Steps>
+      <Step title="Install Redis">
+        ```bash
+        sudo apt update
+        sudo apt install redis-server -y
+        ```
+      </Step>
+
+      <Step title="Configure Redis">
+        Edit the Redis configuration:
+
+        ```bash
+        sudo nano /etc/redis/redis.conf
+        ```
+
+        Find and update:
+
+        ```conf
+        # Change from 'supervised no' to:
+        supervised systemd
+        ```
+
+        Save and exit (Ctrl+X, Y, Enter).
+      </Step>
+
+      <Step title="Start Redis Service">
+        ```bash
+        sudo systemctl start redis-server
+        sudo systemctl enable redis-server
+        ```
+      </Step>
+
+      <Step title="Check Status">
+        ```bash
+        sudo systemctl status redis-server
+        ```
+
+        Should show `active (running)`.
+      </Step>
+
+      <Step title="Verify Installation">
+        ```bash
+        redis-cli ping
+        ```
+
+        Expected output: `PONG`
+      </Step>
+    </Steps>
+  </Tab>
+
+  <Tab title="Linux (CentOS/RHEL)">
+    <Steps>
+      <Step title="Install Redis">
+        ```bash
+        sudo yum install redis -y
+        ```
+
+        Or for newer systems:
+
+        ```bash
+        sudo dnf install redis -y
+        ```
+      </Step>
+
+      <Step title="Start Redis Service">
+        ```bash
+        sudo systemctl start redis
+        sudo systemctl enable redis
+        ```
+      </Step>
+
+      <Step title="Configure Firewall (if needed)">
+        ```bash
+        sudo firewall-cmd --permanent --add-port=6379/tcp
+        sudo firewall-cmd --reload
+        ```
+      </Step>
+
+      <Step title="Verify Installation">
+        ```bash
+        redis-cli ping
+        ```
+
+        Expected output: `PONG`
+      </Step>
+    </Steps>
+  </Tab>
+
+  <Tab title="Windows">
+    <Steps>
+      <Step title="Download Redis">
+        Windows doesn't have official Redis support, but you can use:
+
+        1. **WSL2 (Recommended)**: Install Redis in Ubuntu on WSL
+        2. **Redis for Windows**: Download from [Memurai](https://www.memurai.com/) (Redis-compatible)
+        3. **Docker**: Run Redis in a container (see Docker tab)
+      </Step>
+
+      <Step title="Install via WSL2">
+        ```bash
+        # In WSL2 Ubuntu terminal
+        sudo apt update
+        sudo apt install redis-server -y
+        sudo service redis-server start
+        ```
+      </Step>
+
+      <Step title="Verify Installation">
+        ```bash
+        redis-cli ping
+        ```
+
+        Expected output: `PONG`
+      </Step>
+    </Steps>
+  </Tab>
+
+  <Tab title="Docker">
+    <Steps>
+      <Step title="Pull Redis Image">
+        ```bash
+        docker pull redis:alpine
+        ```
+      </Step>
+
+      <Step title="Run Redis Container">
+        ```bash
+        docker run -d \
+          --name redis \
+          -p 6379:6379 \
+          redis:alpine
+        ```
+
+        With persistence:
+
+        ```bash
+        docker run -d \
+          --name redis \
+          -p 6379:6379 \
+          -v redis-data:/data \
+          redis:alpine redis-server --appendonly yes
+        ```
+      </Step>
+
+      <Step title="Verify Installation">
+        ```bash
+        docker exec -it redis redis-cli ping
+        ```
+
+        Expected output: `PONG`
+      </Step>
+    </Steps>
+  </Tab>
+
+  <Tab title="Docker Compose">
+    Add Redis to your `docker-compose.yml`:
+
+    ```yaml docker-compose.yml
+    version: '3.8'
+
+    services:
+      redis:
+        image: redis:alpine
+        ports:
+          - "6379:6379"
+        volumes:
+          - redis-data:/data
+        command: redis-server --appendonly yes
+        healthcheck:
+          test: ["CMD", "redis-cli", "ping"]
+          interval: 5s
+          timeout: 3s
+          retries: 5
+
+      upload-service:
+        depends_on:
+          - redis
+        environment:
+          - REDIS_URL=redis://redis:6379
+
+      deploy-service:
+        depends_on:
+          - redis
+        environment:
+          - REDIS_URL=redis://redis:6379
+
+    volumes:
+      redis-data:
+    ```
+
+    Start services:
+
+    ```bash
+    docker-compose up -d
+    ```
+  </Tab>
+</Tabs>
+
+## Configuration
+
+### Default Configuration
+
+The application uses default Redis connection settings:
+
+```typescript
+// Default connection (localhost:6379)
+const client = createClient()
+```
+
+This connects to:
+- **Host:** `localhost` (127.0.0.1)
+- **Port:** `6379`
+- **Database:** `0`
+- **No authentication**
+
+### Custom Configuration
+
+If your Redis runs on a different host or port, update the connection:
+
+<CodeGroup>
+```typescript Connection String
+const client = createClient({
+  url: 'redis://username:password@hostname:6379'
+})
+```
+
+```typescript Explicit Options
+const client = createClient({
+  socket: {
+    host: 'localhost',
+    port: 6379
+  },
+  password: 'your-password',
+  database: 0
+})
+```
+
+```typescript Environment Variable
+const client = createClient({
+  url: process.env.REDIS_URL || 'redis://localhost:6379'
+})
+```
+</CodeGroup>
+
+<Note>
+  If you modify connection settings, update both `upload-service/src/utils/buildQueue.ts:3` and `deploy-service/src/server.ts:5`.
+</Note>
+
+### Production Configuration
+
+For production deployments, configure Redis with:
+
+```conf redis.conf
+# Bind to specific interface (or remove for all interfaces)
+bind 127.0.0.1
+
+# Require password
+requirepass your-strong-password-here
+
+# Enable persistence
+appendonly yes
+appendfsync everysec
+
+# Set max memory
+maxmemory 256mb
+maxmemory-policy allkeys-lru
+
+# Enable logging
+loglevel notice
+logfile /var/log/redis/redis-server.log
+```
+
+Restart Redis after changes:
+
+```bash
+sudo systemctl restart redis-server
+```
+
+## Testing the Connection
+
+<Steps>
+  <Step title="Test Basic Connection">
+    ```bash
+    redis-cli ping
+    ```
+
+    Expected: `PONG`
+  </Step>
+
+  <Step title="Test Queue Operations">
+    Simulate the upload service pushing to queue:
+
+    ```bash
+    redis-cli LPUSH build-queue "test-project-123"
+    ```
+
+    Check queue length:
+
+    ```bash
+    redis-cli LLEN build-queue
+    ```
+
+    Simulate deploy service pulling from queue:
+
+    ```bash
+    redis-cli BLPOP build-queue 5
+    ```
+
+    Should return: `1) "build-queue" 2) "test-project-123"`
+  </Step>
+
+  <Step title="Monitor Real-Time Activity">
+    Watch Redis commands in real-time:
+
+    ```bash
+    redis-cli MONITOR
+    ```
+
+    Keep this running while your services operate to see queue activity.
+  </Step>
+
+  <Step title="Test from Node.js">
+    Create a test script `test-redis.js`:
+
+    ```javascript test-redis.js
+    import { createClient } from 'redis';
+
+    const client = createClient();
+
+    client.on('error', (err) => {
+      console.error('Redis error:', err);
+      process.exit(1);
+    });
+
+    client.on('connect', () => {
+      console.log('✓ Connected to Redis');
+    });
+
+    await client.connect();
+
+    // Test push
+    await client.lPush('test-queue', 'test-value');
+    console.log('✓ Pushed to queue');
+
+    // Test pop
+    const value = await client.blPop('test-queue', 5);
+    console.log('✓ Popped from queue:', value);
+
+    await client.disconnect();
+    console.log('✓ All tests passed!');
+    ```
+
+    Run with Bun:
+
+    ```bash
+    bun test-redis.js
+    ```
+  </Step>
+</Steps>
+
+## Monitoring and Management
+
+### Check Queue Status
+
+```bash
+# View queue length
+redis-cli LLEN build-queue
+
+# View queue contents without removing items
+redis-cli LRANGE build-queue 0 -1
+
+# View memory usage
+redis-cli INFO memory
+
+# View connected clients
+redis-cli CLIENT LIST
+```
+
+### Clear Queue
+
+<Warning>
+  This will delete all pending builds. Use with caution!
+</Warning>
+
+```bash
+redis-cli DEL build-queue
+```
+
+### Backup and Restore
+
+<Tabs>
+  <Tab title="RDB Snapshot">
+    ```bash
+    # Trigger immediate save
+    redis-cli SAVE
+
+    # Background save
+    redis-cli BGSAVE
+
+    # Copy snapshot
+    cp /var/lib/redis/dump.rdb /backup/dump.rdb
+
+    # Restore (stop Redis first)
+    sudo systemctl stop redis-server
+    cp /backup/dump.rdb /var/lib/redis/dump.rdb
+    sudo systemctl start redis-server
+    ```
+  </Tab>
+
+  <Tab title="AOF (Append-Only File)">
+    ```bash
+    # Enable AOF in redis.conf
+    appendonly yes
+
+    # Trigger rewrite
+    redis-cli BGREWRITEAOF
+
+    # Backup AOF file
+    cp /var/lib/redis/appendonly.aof /backup/appendonly.aof
+    ```
+  </Tab>
+</Tabs>
+
+## Troubleshooting
+
+<AccordionGroup>
+  <Accordion title="Connection Refused">
+    **Error:** `Error: connect ECONNREFUSED 127.0.0.1:6379`
+
+    **Solutions:**
+    - Check if Redis is running: `redis-cli ping`
+    - Start Redis: `sudo systemctl start redis-server`
+    - Check Redis logs: `sudo tail -f /var/log/redis/redis-server.log`
+    - Verify port: `sudo lsof -i :6379`
+  </Accordion>
+
+  <Accordion title="Authentication Failed">
+    **Error:** `NOAUTH Authentication required`
+
+    **Solutions:**
+    - Set password in connection:
+      ```typescript
+      const client = createClient({
+        password: 'your-password'
+      })
+      ```
+    - Or disable auth in `redis.conf` (development only):
+      ```conf
+      # requirepass your-password
+      ```
+  </Accordion>
+
+  <Accordion title="Queue Not Processing">
+    **Symptoms:** Items stay in queue, builds don't start
+
+    **Solutions:**
+    - Check deploy service is running and connected
+    - Verify queue has items: `redis-cli LLEN build-queue`
+    - Check for errors in deploy service logs
+    - Ensure `BLPOP` timeout is set correctly (0 = block forever)
+  </Accordion>
+
+  <Accordion title="Memory Issues">
+    **Error:** `OOM command not allowed when used memory > 'maxmemory'`
+
+    **Solutions:**
+    - Increase max memory in `redis.conf`:
+      ```conf
+      maxmemory 512mb
+      ```
+    - Set eviction policy:
+      ```conf
+      maxmemory-policy allkeys-lru
+      ```
+    - Clear old data: `redis-cli FLUSHDB`
+  </Accordion>
+
+  <Accordion title="Redis Crashed">
+    **Symptoms:** Service stops unexpectedly
+
+    **Solutions:**
+    - Check system logs: `sudo journalctl -u redis-server -n 100`
+    - Verify disk space: `df -h`
+    - Check Redis logs: `/var/log/redis/redis-server.log`
+    - Increase system limits in `/etc/systemd/system/redis.service`:
+      ```ini
+      [Service]
+      LimitNOFILE=65535
+      ```
+  </Accordion>
+</AccordionGroup>
+
+## Security Best Practices
+
+<CardGroup cols={2}>
+  <Card title="Enable Authentication" icon="lock">
+    ```conf redis.conf
+    requirepass your-strong-password
+    ```
+
+    Update connection:
+    ```typescript
+    createClient({ password: 'your-strong-password' })
+    ```
+  </Card>
+
+  <Card title="Bind to Localhost" icon="network-wired">
+    ```conf redis.conf
+    bind 127.0.0.1 ::1
+    ```
+
+    Only allow local connections unless needed.
+  </Card>
+
+  <Card title="Rename Dangerous Commands" icon="shield">
+    ```conf redis.conf
+    rename-command FLUSHDB ""
+    rename-command FLUSHALL ""
+    rename-command CONFIG "CONFIG-SECRET-NAME"
+    ```
+  </Card>
+
+  <Card title="Use TLS Encryption" icon="lock-keyhole">
+    ```conf redis.conf
+    tls-port 6380
+    tls-cert-file /path/to/redis.crt
+    tls-key-file /path/to/redis.key
+    tls-ca-cert-file /path/to/ca.crt
+    ```
+  </Card>
+</CardGroup>
+
+## Redis Cloud Alternatives
+
+For production, consider managed Redis services:
+
+- **AWS ElastiCache**: Fully managed Redis on AWS
+- **Redis Cloud**: Official cloud offering from Redis Labs
+- **DigitalOcean Managed Redis**: Simple, affordable option
+- **Azure Cache for Redis**: Integrated with Azure services
+- **Google Cloud Memorystore**: Redis on Google Cloud
+
+<Info>
+  Update the connection URL in your services to point to the managed Redis endpoint.
+</Info>
+
+## Next Steps
+
+<CardGroup cols={2}>
+  <Card title="Docker Setup" icon="docker" href="/configuration/docker-setup">
+    Install Docker for running project builds
+  </Card>
+  <Card title="Environment Variables" icon="gear" href="/configuration/environment-variables">
+    Configure all required environment variables
+  </Card>
+</CardGroup>
