@@ -1,0 +1,75 @@
+{
+  "projectType": "saas",
+  "projectName": "Vercel For Frontend",
+  "projectDescription": "A Vercel-like deployment platform for frontend applications powered by Bun, with automated builds and S3 hosting.",
+  "theme": "aspen",
+  "primaryColor": "#bf3b41",
+  "lightColor": "#f7ecd7",
+  "darkColor": "#090908",
+  "navigation": {
+    "tabs": [
+      {
+        "tab": "Documentation",
+        "groups": [
+          {
+            "group": "Get Started",
+            "pages": [
+              "introduction",
+              "quickstart"
+            ]
+          },
+          {
+            "group": "Core Features",
+            "pages": [
+              "features/deployment-process",
+              "features/build-system",
+              "features/queue-management"
+            ]
+          },
+          {
+            "group": "Configuration",
+            "pages": [
+              "configuration/environment-variables",
+              "configuration/aws-setup",
+              "configuration/redis-setup",
+              "configuration/docker-setup"
+            ]
+          },
+          {
+            "group": "Guides",
+            "pages": [
+              "guides/deploying-your-app",
+              "guides/troubleshooting"
+            ]
+          }
+        ]
+      },
+      {
+        "tab": "API Reference",
+        "groups": [
+          {
+            "group": "Endpoints",
+            "pages": [
+              "api/upload-endpoint",
+              "api/deployment-status"
+            ]
+          }
+        ]
+      }
+    ]
+  },
+  "keyFeatures": [
+    "Git repository cloning and upload",
+    "Automated Docker-based builds",
+    "Redis queue management for deployments",
+    "S3 storage and hosting",
+    "Support for React, Vue, and other frontend frameworks"
+  ],
+  "publicApiSurface": [
+    "POST /get/url - Submit repository for deployment",
+    "Upload Service (port 3000)",
+    "Deploy Service (background worker)",
+    "S3 bucket: vercel-frontend",
+    "Redis build queue"
+  ]
+}
